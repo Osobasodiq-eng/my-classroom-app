@@ -1,0 +1,20 @@
+{
+  "name": "classroom-governor",
+  "version": "1.0.0",
+  "description": "Course Governor — attendance, materials, assignments and announcements for a class, with a single Governor login and no-login student self check-in.",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.12.0"
+  }
+}

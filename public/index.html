@@ -1,0 +1,1410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Roll Call — Class Ledger</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.23/jspdf.plugin.autotable.min.js"></script>
+<style>
+  :root{
+    --bg: #1c3327; --bg-deep: #17291f; --panel: #24402f; --panel-raised: #2a4a37;
+    --chalk: #f1eee2; --chalk-dim: #aebcae; --chalk-faint: #7f9084;
+    --brass: #c9a667; --brass-dim: #8f7a4d; --rose: #c1666b; --sage: #7fa98f;
+    --slate: #8ea9c9; --mauve: #b98ec9; --green: #9fd6ab;
+    --rule: rgba(241,238,226,0.14); --rule-strong: rgba(241,238,226,0.28);
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background: radial-gradient(ellipse at 20% 0%, rgba(241,238,226,0.05), transparent 60%),
+      radial-gradient(ellipse at 90% 100%, rgba(201,166,103,0.06), transparent 55%), var(--bg);
+    color:var(--chalk); font-family:'Inter', sans-serif; min-height:100vh; -webkit-font-smoothing:antialiased;
+  }
+  body::before{
+    content:""; position:fixed; inset:0; pointer-events:none; z-index:0; opacity:0.05; mix-blend-mode:overlay;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  }
+  .app{position:relative; z-index:1; max-width:1240px; margin:0 auto; padding:28px 24px 80px;}
+  header.top{ display:flex; align-items:flex-end; justify-content:space-between; gap:20px; padding-bottom:20px; margin-bottom:22px; border-bottom:1px solid var(--rule-strong); flex-wrap:wrap; }
+  .brand{display:flex; align-items:baseline; gap:14px;}
+  .brand .mark{ font-family:'Fraunces', serif; font-weight:700; font-size:15px; color:var(--brass); letter-spacing:.14em; text-transform:uppercase; border:1px solid var(--brass-dim); border-radius:3px; padding:3px 8px; }
+  .class-name{ font-family:'Fraunces', serif; font-weight:600; font-size:clamp(24px,3.2vw,34px); color:var(--chalk); background:transparent; border:none; outline:none; padding:0; min-width:180px; border-bottom:1px dashed transparent; }
+  .class-name:focus{border-bottom:1px dashed var(--brass);}
+  .class-sub{font-size:12.5px; color:var(--chalk-dim); margin-top:4px; font-family:'IBM Plex Mono', monospace; letter-spacing:.03em;}
+  .top-right{display:flex; align-items:center; gap:18px; flex-wrap:wrap;}
+  .role-switch{display:flex; align-items:center; gap:10px;}
+  .role-switch .label{font-size:11px; text-transform:uppercase; letter-spacing:.12em; color:var(--chalk-faint);}
+  .seg{display:flex; border:1px solid var(--rule-strong); border-radius:8px; overflow:hidden;}
+  .seg button{ background:transparent; border:none; color:var(--chalk-dim); font-family:'IBM Plex Mono', monospace; font-size:12.5px; padding:8px 14px; cursor:pointer; transition:.15s; }
+  .seg button.active{background:var(--brass); color:#20301f; font-weight:600;}
+  .seg button:not(.active):hover{background:var(--panel-raised); color:var(--chalk);}
+  select.identity{ background:var(--bg-deep); border:1px solid var(--rule-strong); border-radius:7px; padding:7px 10px; color:var(--chalk); font-family:'IBM Plex Mono',monospace; font-size:12px; }
+  .layout{display:grid; grid-template-columns:196px 1fr; gap:26px;}
+  @media (max-width:780px){ .layout{grid-template-columns:1fr;} }
+  nav.side{display:flex; flex-direction:column; gap:4px;}
+  nav.side .navbtn{ display:flex; align-items:center; gap:10px; padding:11px 12px; border-radius:8px; cursor:pointer; color:var(--chalk-dim); font-size:13.5px; font-weight:500; border:1px solid transparent; transition:.15s; }
+  nav.side .navbtn svg{flex:none; opacity:.85;}
+  nav.side .navbtn:hover{background:var(--panel); color:var(--chalk);}
+  nav.side .navbtn.active{background:var(--panel-raised); color:var(--brass); border-color:var(--rule);}
+  nav.side .navbtn.active svg{stroke:var(--brass);}
+  nav.side .navdivider{height:1px; background:var(--rule); margin:8px 4px;}
+  @media (max-width:780px){ nav.side{flex-direction:row; overflow-x:auto; gap:8px; padding-bottom:4px;} nav.side .navbtn{white-space:nowrap;} nav.side .navdivider{display:none;} }
+  main{min-width:0;}
+  .panel{ background:var(--panel); border:1px solid var(--rule); border-radius:12px; padding:24px; }
+  .panel + .panel{margin-top:18px;}
+  .panel h2{ font-family:'Fraunces', serif; font-weight:600; font-size:20px; margin:0 0 4px; display:flex; align-items:center; gap:10px; justify-content:space-between; flex-wrap:wrap;}
+  .panel .hint{font-size:13px; color:var(--chalk-faint); margin:0 0 18px;}
+  .stat-row{display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:14px; margin-bottom:20px;}
+  .stat{ background:var(--panel-raised); border:1px solid var(--rule); border-radius:10px; padding:16px; }
+  .stat .num{font-family:'Fraunces', serif; font-size:28px; color:var(--brass); font-weight:600; line-height:1;}
+  .stat .lbl{font-size:11px; color:var(--chalk-dim); text-transform:uppercase; letter-spacing:.08em; margin-top:6px;}
+  table.ledger{width:100%; border-collapse:collapse; font-size:14px;}
+  table.ledger th{ text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--chalk-faint); font-weight:600; padding:8px 10px; border-bottom:1px solid var(--rule-strong); }
+  table.ledger td{padding:10px 10px; border-bottom:1px solid var(--rule); vertical-align:middle;}
+  table.ledger tr:last-child td{border-bottom:none;}
+  table.ledger tr.clickable{cursor:pointer;}
+  table.ledger tr.clickable:hover{background:rgba(241,238,226,0.03);}
+  .roll{font-family:'IBM Plex Mono', monospace; color:var(--chalk-dim); font-size:12.5px;}
+  .bar-wrap{display:flex; align-items:center; gap:10px;}
+  .bar-track{flex:1; height:6px; background:rgba(241,238,226,0.1); border-radius:4px; overflow:hidden;}
+  .bar-fill{height:100%; background:linear-gradient(90deg, var(--brass-dim), var(--brass));}
+  .bar-fill.risk{background:linear-gradient(90deg, #8a4448, var(--rose));}
+  .pct{font-family:'IBM Plex Mono', monospace; font-size:12.5px; color:var(--chalk); width:38px; text-align:right;}
+  .risk-badge{font-family:'IBM Plex Mono',monospace; font-size:9.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--rose); border:1px solid rgba(193,102,107,0.4); border-radius:20px; padding:1px 7px; margin-left:8px;}
+  .form-row{display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px;}
+  .field{display:flex; flex-direction:column; gap:5px; flex:1; min-width:140px;}
+  .field label{font-size:11px; text-transform:uppercase; letter-spacing:.07em; color:var(--chalk-faint);}
+  .field input, .field select, .field textarea{ background:var(--bg-deep); border:1px solid var(--rule-strong); border-radius:7px; padding:9px 10px; color:var(--chalk); font-family:'Inter',sans-serif; font-size:13.5px; outline:none; }
+  .field input:focus, .field select:focus, .field textarea:focus{border-color:var(--brass);}
+  .field textarea{resize:vertical; min-height:56px;}
+  .field input[type=file]{padding:7px;}
+  .btn{ background:var(--brass); color:#20301f; border:none; border-radius:7px; padding:9px 16px; font-weight:600; font-size:13.5px; cursor:pointer; transition:.15s; font-family:'Inter',sans-serif; }
+  .btn:hover{background:#dab97a;}
+  .btn.ghost{background:transparent; border:1px solid var(--rule-strong); color:var(--chalk-dim);}
+  .btn.ghost:hover{color:var(--chalk); border-color:var(--brass-dim);}
+  .btn.small{padding:6px 10px; font-size:12px;}
+  .btn.danger{background:transparent; color:var(--rose); border:1px solid rgba(193,102,107,0.4);}
+  .btn.danger:hover{background:rgba(193,102,107,0.12);}
+  .btn:disabled{opacity:.4; cursor:not-allowed;}
+  .toolbar{display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:16px;}
+  .toolbar select, .toolbar input[type=text]{ background:var(--bg-deep); border:1px solid var(--rule-strong); border-radius:7px; padding:8px 10px; color:var(--chalk); font-size:13px; font-family:'Inter',sans-serif; }
+  .toolbar input[type=text]{min-width:200px;}
+  .lecture-meta{font-size:12.5px; color:var(--chalk-faint); font-family:'IBM Plex Mono', monospace;}
+  .roster-row{ display:flex; align-items:center; gap:14px; padding:11px 4px; border-bottom:1px solid var(--rule); flex-wrap:wrap; }
+  .roster-row:last-child{border-bottom:none;}
+  .roster-row .who{flex:1; display:flex; align-items:baseline; gap:10px; min-width:160px;}
+  .roster-row .name{font-family:'Fraunces', serif; font-size:15.5px;}
+  .method-tag{font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:var(--chalk-faint);}
+  .status-tag{ font-family:'IBM Plex Mono', monospace; font-size:11px; text-transform:uppercase; letter-spacing:.06em; padding:2px 8px; border-radius:20px; border:1px solid transparent; }
+  .status-tag.present{color:var(--green); border-color:rgba(159,214,171,0.35); background:rgba(159,214,171,0.08);}
+  .status-tag.absent{color:var(--rose); border-color:rgba(193,102,107,0.4); background:rgba(193,102,107,0.08);}
+  .status-tag.unmarked{color:var(--chalk-faint); border-color:var(--rule);}
+  .chalk-toggle{ width:38px; height:38px; border-radius:8px; border:1px solid var(--rule-strong); background:var(--bg-deep); cursor:pointer; display:flex; align-items:center; justify-content:center; transition:.15s; }
+  .chalk-toggle:hover{border-color:var(--brass-dim);}
+  .chalk-toggle svg path{ fill:none; stroke:var(--chalk); stroke-width:2.4; stroke-linecap:round; stroke-linejoin:round; }
+  .chalk-toggle.present svg path{stroke:var(--green);}
+  .chalk-toggle.absent svg path{stroke:var(--rose);}
+  .course-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:14px;}
+  .course-card{ background:var(--panel-raised); border:1px solid var(--rule); border-radius:10px; padding:16px; position:relative; }
+  .course-dot{width:10px; height:10px; border-radius:50%; display:inline-block; margin-right:8px; flex:none;}
+  .course-card h3{font-family:'Fraunces',serif; font-size:16.5px; margin:0 0 4px; display:flex; align-items:center;}
+  .course-card .ccode{font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--chalk-faint); margin-bottom:8px;}
+  .course-card .lecturers{font-size:12px; color:var(--chalk-dim); margin-bottom:10px; line-height:1.5;}
+  .course-card .cstats{font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:var(--chalk-dim); display:flex; gap:12px; margin-bottom:10px;}
+  .course-card .cactions{position:absolute; top:12px; right:12px; display:flex; gap:6px;}
+  .material-card{ display:flex; gap:14px; padding:14px 4px; border-bottom:1px solid var(--rule); align-items:flex-start; }
+  .material-card:last-child{border-bottom:none;}
+  .material-type{ font-family:'IBM Plex Mono', monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:.07em; color:var(--brass); border:1px solid var(--brass-dim); border-radius:4px; padding:3px 7px; white-space:nowrap; margin-top:2px; }
+  .material-body{flex:1; min-width:0;}
+  .material-body .mtitle{font-family:'Fraunces', serif; font-size:16px; margin:0 0 3px;}
+  .material-body .msub{font-size:12px; color:var(--chalk-faint); font-family:'IBM Plex Mono', monospace; margin-bottom:6px;}
+  .material-body .mnotes{font-size:13.5px; color:var(--chalk-dim); line-height:1.5;}
+  .material-body a{color:var(--brass); text-decoration:none; border-bottom:1px dotted var(--brass-dim); font-size:13px;}
+  .material-body a:hover{border-bottom-style:solid;}
+  .tag-chip{display:inline-block; font-size:10.5px; font-family:'IBM Plex Mono',monospace; color:var(--chalk-dim); background:rgba(241,238,226,0.06); border:1px solid var(--rule); border-radius:20px; padding:1px 8px; margin:6px 6px 0 0;}
+  .announce-card, .assignment-card{padding:14px 4px; border-bottom:1px solid var(--rule);}
+  .announce-card:last-child, .assignment-card:last-child{border-bottom:none;}
+  .announce-card h3, .assignment-card h3{font-family:'Fraunces',serif; font-size:16px; margin:0 0 4px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;}
+  .pin{font-size:9.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--brass); border:1px solid var(--brass-dim); border-radius:20px; padding:1px 7px; font-family:'IBM Plex Mono',monospace;}
+  .overdue-badge{font-size:9.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--rose); border:1px solid rgba(193,102,107,0.4); border-radius:20px; padding:1px 7px; font-family:'IBM Plex Mono',monospace;}
+  .announce-meta, .assignment-meta{font-size:11.5px; color:var(--chalk-faint); font-family:'IBM Plex Mono',monospace; margin-bottom:6px;}
+  .announce-body, .assignment-body{font-size:13.5px; color:var(--chalk-dim); line-height:1.55; white-space:pre-wrap;}
+  .empty{ text-align:center; padding:36px 20px; color:var(--chalk-faint); font-size:13.5px; border:1px dashed var(--rule-strong); border-radius:10px; }
+  .list-actions{display:flex; gap:8px; align-items:center;}
+  .drawer-overlay{position:fixed; inset:0; background:rgba(10,18,13,0.55); z-index:20; display:flex; justify-content:flex-end;}
+  .drawer{width:min(460px,92vw); background:var(--bg-deep); border-left:1px solid var(--rule-strong); height:100%; overflow-y:auto; padding:24px;}
+  .drawer h2{font-family:'Fraunces',serif; margin:0 0 4px;}
+  .drawer .close{float:right; background:none; border:none; color:var(--chalk-faint); font-size:20px; cursor:pointer;}
+  .lecturer-chip{ display:inline-flex; align-items:center; gap:6px; font-size:12.5px; background:rgba(241,238,226,0.06); border:1px solid var(--rule); border-radius:20px; padding:4px 6px 4px 10px; margin:0 6px 6px 0; }
+  .lecturer-chip button{background:none; border:none; color:var(--chalk-faint); cursor:pointer; font-size:13px; padding:0 2px;}
+  .lecturer-chip button:hover{color:var(--rose);}
+  .session-card{ border:1px solid var(--rule); border-radius:9px; padding:12px 14px; margin-bottom:10px; }
+  .session-top{display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;}
+  .badge{font-family:'IBM Plex Mono',monospace; font-size:10px; text-transform:uppercase; letter-spacing:.06em; padding:2px 8px; border-radius:20px; border:1px solid transparent;}
+  .badge.active{color:var(--green); border-color:rgba(159,214,171,0.35); background:rgba(159,214,171,0.08);}
+  .badge.expired{color:var(--chalk-faint); border-color:var(--rule);}
+  .badge.scheduled{color:var(--slate); border-color:rgba(142,169,201,0.4); background:rgba(142,169,201,0.08);}
+  .code-pill{font-family:'IBM Plex Mono',monospace; font-size:15px; letter-spacing:.1em; color:var(--brass); background:rgba(201,166,103,0.1); border:1px solid var(--brass-dim); border-radius:6px; padding:4px 10px;}
+  .link-row{display:flex; align-items:center; gap:8px; margin-top:8px; flex-wrap:wrap;}
+  .link-row input{flex:1; min-width:180px; background:var(--bg-deep); border:1px solid var(--rule); border-radius:6px; padding:6px 8px; color:var(--chalk-dim); font-family:'IBM Plex Mono',monospace; font-size:11.5px;}
+  ::selection{background:var(--brass); color:#20301f;}
+
+  /* KIOSK / CHECK-IN */
+  body.kiosk .app{max-width:520px; padding-top:8vh;}
+  .kiosk-card{ background:var(--panel); border:1px solid var(--rule-strong); border-radius:16px; padding:32px 28px; text-align:center; }
+  .kiosk-card .mark{ font-family:'Fraunces', serif; font-weight:700; font-size:13px; color:var(--brass); letter-spacing:.16em; text-transform:uppercase; margin-bottom:18px; display:inline-block; border:1px solid var(--brass-dim); border-radius:3px; padding:3px 9px; }
+  .kiosk-card h1{font-family:'Fraunces',serif; font-size:26px; margin:6px 0 4px;}
+  .kiosk-card .sub{font-size:13.5px; color:var(--chalk-dim); margin-bottom:6px;}
+  .kiosk-card .countdown{font-family:'IBM Plex Mono',monospace; font-size:13px; color:var(--brass); margin:14px 0 20px;}
+  .kiosk-card select{width:100%; margin-bottom:14px;}
+  .kiosk-card .btn{width:100%; padding:13px;}
+  .kiosk-success{color:var(--green); font-family:'Fraunces',serif; font-size:20px; margin:10px 0 6px;}
+  .kiosk-back{display:inline-block; margin-top:22px; font-size:12px; color:var(--chalk-faint); text-decoration:none; border-bottom:1px dotted var(--chalk-faint);}
+
+  @media (prefers-reduced-motion: reduce){ *{transition:none !important;} }
+</style>
+</head>
+<body>
+<div class="app" id="appRoot">
+
+  <header class="top">
+    <div>
+      <div class="brand">
+        <span class="mark">Roll Call</span>
+        <input class="class-name" id="classNameInput" value="MBA Cohort" spellcheck="false" />
+      </div>
+      <div class="class-sub" id="classSub">— · —</div>
+    </div>
+    <div class="top-right">
+      <div class="role-switch" id="identityWrap" style="display:none;">
+        <span class="label">I am</span>
+        <select class="identity" id="identitySelect"></select>
+      </div>
+      <div class="role-switch">
+        <span class="label">Viewing as</span>
+        <div class="seg" id="roleSeg">
+          <button data-role="governor" class="active">Governor</button>
+          <button data-role="student">Student</button>
+        </div>
+      </div>
+      <button class="btn ghost small" id="signOutBtn" style="display:none;">Sign out</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="side" id="sideNav">
+      <div class="navbtn active" data-tab="dashboard">
+        <svg width="16" height="16" viewBox="0 0 24 24"><path d="M4 13h6V4H4v9zM14 20h6v-9h-6v9zM14 4v4h6V4h-6zM4 20h6v-4H4v4z" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round"/></svg>
+        Dashboard
+      </div>
+      <div class="navbtn" data-tab="attendance">
+        <svg width="16" height="16" viewBox="0 0 24 24"><path d="M4 5h16M4 12h16M4 19h10M4 5v14" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/><path d="M17 15l2 2 3-3" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Attendance
+      </div>
+      <div class="navbtn" data-tab="materials">
+        <svg width="16" height="16" viewBox="0 0 24 24"><path d="M5 4h9l5 5v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round"/><path d="M14 4v5h5" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round"/></svg>
+        Materials
+      </div>
+      <div class="navbtn" data-tab="assignments">
+        <svg width="16" height="16" viewBox="0 0 24 24"><path d="M9 3h6v3H9z" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round"/><path d="M6 5h12v16H6z" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round"/><path d="M9 11h6M9 15h6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        Assignments
+      </div>
+      <div class="navbtn" data-tab="announcements">
+        <svg width="16" height="16" viewBox="0 0 24 24"><path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1z" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round"/><path d="M15 9a3 3 0 0 1 0 6" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg>
+        Announcements
+      </div>
+      <div class="navdivider"></div>
+      <div class="navbtn" data-tab="courses">
+        <svg width="16" height="16" viewBox="0 0 24 24"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4H20v14H6.5A2.5 2.5 0 0 0 4 20.5z" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round"/><path d="M4 6.5v14" stroke="currentColor" stroke-width="1.6" fill="none"/></svg>
+        Courses
+      </div>
+      <div class="navbtn" data-tab="roster">
+        <svg width="16" height="16" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M15 9c1.66 0 3 1.34 3 3M17 14c2 0 4 1.6 4 4" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg>
+        Roster
+      </div>
+    </nav>
+    <main id="mainArea"></main>
+  </div>
+</div>
+
+<script>
+(function(){
+  const uid = () => Math.random().toString(36).slice(2,9);
+  const COURSE_COLORS = ["#c9a667","#c1666b","#7fa98f","#8ea9c9","#b98ec9"];
+  const RISK_THRESHOLD = 75;
+
+  let role = "governor";
+  let activeTab = "dashboard";
+  let selectedLectureId = null;
+  let attendanceCourseFilter = "";
+  let materialsCourseFilter = "";
+  let materialsTypeFilter = "";
+  let materialsSearch = "";
+  let assignmentsCourseFilter = "";
+  let myIdentityId = null;
+  let drawerStudentId = null;
+  let drawerCourseId = null;
+  let editingLectureId = null;
+  let editingMaterialId = null;
+  let editingCourseId = null;
+  let editingAssignmentId = null;
+  let importSummary = "";
+  let tickTimer = null;
+  let loginOpen = false;
+  let loginError = "";
+
+  // ---------- AUTH ----------
+  let authToken = localStorage.getItem("governorToken") || null;
+  let stateVersion = 1;
+  role = authToken ? "governor" : "student";
+
+  function setAuthToken(token){
+    authToken = token;
+    if(token) localStorage.setItem("governorToken", token);
+    else localStorage.removeItem("governorToken");
+  }
+
+  const defaultData = () => ({
+    className: "MBA Cohort",
+    courses: [],
+    students: [],
+    lectures: [],
+    attendance: {},
+    attendanceSessions: [],
+    materials: [],
+    assignments: [],
+    announcements: []
+  });
+
+  let data = defaultData();
+
+  // ---------- STORAGE ----------
+
+  async function loadData(){
+    try{
+      const res = await fetch("/api/state");
+      if(!res.ok) throw new Error("bad status " + res.status);
+      const json = await res.json();
+      data = Object.assign(defaultData(), json.data);
+      stateVersion = json.version;
+    }catch(e){
+      console.error("Could not load class data from the server", e);
+      data = defaultData();
+      alert("Could not reach the server to load class data. Check your connection and reload.");
+    }
+  }
+
+  // Governor-only writes. Silently no-ops if not signed in (shouldn't
+  // normally be reachable — governor-only UI is gated behind login).
+  async function saveData(){
+    if(!authToken){ console.warn("saveData called without a Governor session"); return; }
+    try{
+      const res = await fetch("/api/state", {
+        method: "PUT",
+        headers: {"Content-Type":"application/json", "Authorization":"Bearer " + authToken},
+        body: JSON.stringify({data, version: stateVersion}),
+      });
+      if(res.status === 401){
+        setAuthToken(null);
+        role = "student";
+        alert("Your Governor session expired. Sign in again to keep editing.");
+        render();
+        return;
+      }
+      if(res.status === 409){
+        const conflict = await res.json();
+        data = Object.assign(defaultData(), conflict.currentData);
+        stateVersion = conflict.currentVersion;
+        alert("This class was updated from another device just now — the latest version has been loaded. Please redo your last change if needed.");
+        render();
+        return;
+      }
+      if(!res.ok) throw new Error("bad status " + res.status);
+      const json = await res.json();
+      stateVersion = json.version;
+    }catch(e){
+      console.error("Save failed", e);
+      alert("Could not save your change — check your connection and try again.");
+    }
+  }
+
+  async function governorLogin(password){
+    const res = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({password}),
+    });
+    const json = await res.json();
+    if(!res.ok) return {ok:false, error: json.error || "Sign-in failed."};
+    setAuthToken(json.token);
+    return {ok:true};
+  }
+
+  function governorLogout(){
+    setAuthToken(null);
+    role = "student";
+    myIdentityId = null;
+    render();
+  }
+
+  // ---------- HELPERS ----------
+
+  function fmtDate(d){
+    if(!d) return "—";
+    const dt = new Date(d + "T00:00:00");
+    if(isNaN(dt)) return d;
+    return dt.toLocaleDateString(undefined, {month:"short", day:"numeric", year:"numeric"});
+  }
+  function fmtDateTime(iso){
+    if(!iso) return "—";
+    const dt = new Date(iso);
+    if(isNaN(dt)) return iso;
+    return dt.toLocaleString(undefined, {month:"short", day:"numeric", hour:"numeric", minute:"2-digit"});
+  }
+  function fmtTime(iso){
+    if(!iso) return "—";
+    const dt = new Date(iso);
+    if(isNaN(dt)) return iso;
+    return dt.toLocaleTimeString(undefined, {hour:"numeric", minute:"2-digit"});
+  }
+
+  function courseOf(id){ return data.courses.find(c => c.id === id); }
+  function courseColor(id){ const c = courseOf(id); return c ? c.color : "var(--chalk-faint)"; }
+  function courseLectures(courseId){ return data.lectures.filter(l => l.courseId === courseId).sort((a,b)=> (a.date||"").localeCompare(b.date||"")); }
+  function sessionNumber(lecture){ return courseLectures(lecture.courseId).findIndex(l => l.id === lecture.id) + 1; }
+  function lecturerName(courseId, lecturerId){
+    const c = courseOf(courseId); if(!c) return "";
+    const l = (c.lecturers||[]).find(x => x.id === lecturerId);
+    return l ? l.name : "";
+  }
+
+  function getRecord(lectureId, studentId){
+    const rec = (data.attendance[lectureId] || {})[studentId];
+    if(!rec) return {status:"unmarked", method:null, at:null};
+    if(typeof rec === "string") return {status:rec, method:"manual", at:null};
+    return rec;
+  }
+  function setRecord(lectureId, studentId, status, method){
+    if(!data.attendance[lectureId]) data.attendance[lectureId] = {};
+    if(status === "unmarked"){ delete data.attendance[lectureId][studentId]; return; }
+    data.attendance[lectureId][studentId] = {status, method, at: new Date().toISOString()};
+  }
+
+  function studentStats(studentId){
+    let present=0, total=0;
+    for(const lec of data.lectures){
+      const st = getRecord(lec.id, studentId).status;
+      if(st === "present" || st === "absent"){ total++; if(st === "present") present++; }
+    }
+    return {present, total, pct: total ? Math.round((present/total)*100) : null};
+  }
+  function studentHistory(studentId){
+    return [...data.lectures].sort((a,b)=>(a.date||"").localeCompare(b.date||"")).map(l => ({lecture:l, rec: getRecord(l.id, studentId)}));
+  }
+  function lectureStats(lectureId){
+    let present=0, absent=0, unmarked=0;
+    for(const s of data.students){
+      const st = getRecord(lectureId, s.id).status;
+      if(st === "present") present++; else if(st === "absent") absent++; else unmarked++;
+    }
+    return {present, absent, unmarked};
+  }
+
+  function checkIcon(){ return '<svg width="16" height="16" viewBox="0 0 24 24"><path d="M4 12.5l5 5.5 11-13"/></svg>'; }
+  function crossIcon(){ return '<svg width="16" height="16" viewBox="0 0 24 24"><path d="M5 5l14 14M19 5L5 19"/></svg>'; }
+  function dotIcon(){ return '<svg width="10" height="10" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" fill="currentColor" stroke="none"/></svg>'; }
+  function escapeHtml(str){ return String(str == null ? "" : str).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+  function escapeAttr(str){ return escapeHtml(str); }
+  function genCode(){ const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; let s=""; for(let i=0;i<6;i++) s += chars[Math.floor(Math.random()*chars.length)]; return s; }
+
+  function downloadCsv(filename, rows){
+    const csv = rows.map(r => r.map(cell => '"' + String(cell == null ? "" : cell).replace(/"/g,'""') + '"').join(",")).join("\n");
+    const blob = new Blob([csv], {type:"text/csv;charset=utf-8;"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = filename; document.body.appendChild(a); a.click();
+    document.body.removeChild(a); URL.revokeObjectURL(url);
+  }
+
+  function exportLecturePdf(lectureId){
+    const lec = data.lectures.find(l => l.id === lectureId);
+    if(!lec) return;
+    if(!window.jspdf){ alert("PDF library did not load — check your connection. Try Export CSV instead."); return; }
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+    const course = courseOf(lec.courseId);
+    doc.setFont("helvetica","bold"); doc.setFontSize(15);
+    doc.text(data.className || "Attendance", 14, 18);
+    doc.setFontSize(11); doc.setFont("helvetica","normal");
+    doc.text((course ? course.name + " — " : "") + lec.title, 14, 26);
+    doc.setFontSize(9.5); doc.setTextColor(90);
+    doc.text("Session " + sessionNumber(lec) + " · " + fmtDate(lec.date) + (lec.topic ? " · " + lec.topic : ""), 14, 32);
+    const rows = data.students.map(s => {
+      const rec = getRecord(lec.id, s.id);
+      return [s.roll, s.name, rec.status, rec.method || "—", rec.at ? fmtDateTime(rec.at) : "—"];
+    });
+    doc.autoTable({
+      startY: 38, head: [["Roll","Name","Status","Method","Signed at"]], body: rows,
+      styles:{fontSize:9}, headStyles:{fillColor:[36,64,47]}
+    });
+    doc.save("attendance_" + (lec.title||"session").replace(/\s+/g,"_") + ".pdf");
+  }
+
+  function exportRosterPdf(){
+    if(!window.jspdf){ alert("PDF library did not load — check your connection. Try Export CSV instead."); return; }
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+    doc.setFont("helvetica","bold"); doc.setFontSize(15);
+    doc.text((data.className || "Class") + " — Attendance Summary", 14, 18);
+    const rows = data.students.map(s => { const st = studentStats(s.id); return [s.roll, s.name, s.email||"", st.present, st.total - st.present, st.pct===null?"—":st.pct+"%"]; });
+    doc.autoTable({ startY: 26, head: [["Roll","Name","Email","Present","Absent","Attendance %"]], body: rows, styles:{fontSize:9}, headStyles:{fillColor:[36,64,47]} });
+    doc.save("roster_attendance_summary.pdf");
+  }
+
+  function parseCsvText(text){
+    return text.split(/\r?\n/).map(l => l.trim()).filter(Boolean).map(line => line.split(",").map(c => c.trim().replace(/^"|"$/g,"")));
+  }
+
+  function checkinUrl(code){
+    return location.origin + location.pathname + location.search + "#checkin=" + code;
+  }
+
+  async function copyText(text){
+    try{ await navigator.clipboard.writeText(text); return true; }
+    catch(e){ return false; }
+  }
+
+  // ---------- DASHBOARD ----------
+
+  function renderDashboard(){
+    const totalLectures = data.lectures.length;
+    const totalStudents = data.students.length;
+    const totalMaterials = data.materials.length;
+    const allPct = data.students.map(s => studentStats(s.id).pct).filter(p => p !== null);
+    const avgAttendance = allPct.length ? Math.round(allPct.reduce((a,b)=>a+b,0)/allPct.length) + "%" : "—";
+    const atRisk = data.students.map(s => ({s, st: studentStats(s.id)})).filter(x => x.st.pct !== null && x.st.pct < RISK_THRESHOLD);
+
+    const rows = data.students.map(s => {
+      const st = studentStats(s.id);
+      const pct = st.pct === null ? 0 : st.pct;
+      const pctLabel = st.pct === null ? "—" : st.pct + "%";
+      const risk = st.pct !== null && st.pct < RISK_THRESHOLD;
+      return '<tr class="clickable" data-open-student="' + s.id + '">' +
+        '<td class="roll">' + s.roll + '</td>' +
+        '<td style="font-family:\'Fraunces\',serif; font-size:14.5px;">' + escapeHtml(s.name) + (risk ? '<span class="risk-badge">At risk</span>' : '') + '</td>' +
+        '<td class="roll">' + st.present + '/' + st.total + '</td>' +
+        '<td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill ' + (risk?'risk':'') + '" style="width:' + pct + '%"></div></div><div class="pct">' + pctLabel + '</div></div></td>' +
+      '</tr>';
+    }).join("");
+
+    const recentAnnouncements = [...data.announcements].sort((a,b)=> (b.pinned - a.pinned) || (b.date||"").localeCompare(a.date||"")).slice(0,2);
+    const upcomingAssignments = [...data.assignments].filter(a => !a.dueDate || a.dueDate >= new Date().toISOString().slice(0,10)).sort((a,b)=>(a.dueDate||"").localeCompare(b.dueDate||"")).slice(0,3);
+
+    return (
+      '<div class="panel"><h2>' + escapeHtml(data.className) + '</h2>' +
+      '<p class="hint">Overview across ' + data.courses.length + ' course' + (data.courses.length===1?'':'s') + ', lectures held, and reading materials shared.</p>' +
+      '<div class="stat-row">' +
+        '<div class="stat"><div class="num">' + totalLectures + '</div><div class="lbl">Lectures logged</div></div>' +
+        '<div class="stat"><div class="num">' + totalStudents + '</div><div class="lbl">Students on roster</div></div>' +
+        '<div class="stat"><div class="num">' + totalMaterials + '</div><div class="lbl">Reading materials</div></div>' +
+        '<div class="stat"><div class="num">' + avgAttendance + '</div><div class="lbl">Avg. attendance</div></div>' +
+      '</div>' +
+      (data.students.length === 0 ? '<div class="empty">No students on the roster yet. Add your cohort under the Roster tab.</div>' :
+        '<table class="ledger"><thead><tr><th>Roll</th><th>Student</th><th>Present</th><th>Attendance</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+        '<p class="hint" style="margin:12px 0 0;">Click a student to see their full session-by-session record.</p>') +
+      '</div>' +
+      (atRisk.length ? '<div class="panel"><h2>At-risk students <span class="risk-badge" style="margin-left:0;">Below ' + RISK_THRESHOLD + '%</span></h2>' +
+        '<p class="hint">Students whose attendance has dropped below the ' + RISK_THRESHOLD + '% threshold.</p>' +
+        atRisk.map(x => '<div class="roster-row"><div class="who"><span class="roll">' + x.s.roll + '</span><span class="name">' + escapeHtml(x.s.name) + '</span></div><span class="status-tag absent">' + x.st.pct + '%</span></div>').join("") +
+      '</div>' : '') +
+      (upcomingAssignments.length ? '<div class="panel"><h2>Upcoming assignments</h2>' +
+        upcomingAssignments.map(a => '<div class="roster-row"><div class="who"><span class="name" style="font-size:14px;">' + escapeHtml(a.title) + '</span><span class="lecture-meta">' + escapeHtml(courseOf(a.courseId)?.name||'') + '</span></div><span class="lecture-meta">Due ' + fmtDate(a.dueDate) + '</span></div>').join("") +
+      '</div>' : '') +
+      (recentAnnouncements.length ? '<div class="panel"><h2>Latest from the board</h2>' +
+        recentAnnouncements.map(a => '<div class="announce-card"><h3>' + (a.pinned?'<span class="pin">Pinned</span>':'') + escapeHtml(a.title) + '</h3><div class="announce-meta">' + fmtDate(a.date) + '</div><div class="announce-body">' + escapeHtml(a.body) + '</div></div>').join("") +
+      '</div>' : '')
+    );
+  }
+
+  // ---------- ATTENDANCE ----------
+
+  function renderAttendance(){
+    const filteredLectures = attendanceCourseFilter ? data.lectures.filter(l => l.courseId === attendanceCourseFilter) : data.lectures;
+    if(!selectedLectureId || !filteredLectures.find(l => l.id === selectedLectureId)){
+      selectedLectureId = filteredLectures.length ? filteredLectures[filteredLectures.length-1].id : null;
+    }
+    const lec = data.lectures.find(l => l.id === selectedLectureId);
+    const courseFilterOptions = '<option value="">All courses</option>' + data.courses.map(c => '<option value="' + c.id + '" ' + (attendanceCourseFilter===c.id?'selected':'') + '>' + escapeHtml(c.name) + '</option>').join("");
+    const lecOptions = filteredLectures.map(l => '<option value="' + l.id + '" ' + (l.id===selectedLectureId?'selected':'') + '>' + escapeHtml(courseOf(l.courseId)?.name || "—") + " · Session " + sessionNumber(l) + " — " + escapeHtml(l.title) + " (" + fmtDate(l.date) + ")</option>").join("");
+    const editingLecture = editingLectureId ? data.lectures.find(l => l.id === editingLectureId) : null;
+
+    const addForm = role === "governor" && data.courses.length ? (
+      '<div class="panel" style="margin-bottom:18px;"><h2>' + (editingLecture ? "Edit lecture" : "Log a new lecture") + '</h2>' +
+      '<p class="hint">' + (editingLecture ? "Update the session details below." : "Add a session before taking attendance for it.") + '</p>' +
+      '<form id="lectureForm"><input type="hidden" name="id" value="' + (editingLecture ? editingLecture.id : "") + '" />' +
+      '<div class="form-row">' +
+        '<div class="field"><label>Course</label><select required name="courseId" id="lectureCourseSelect">' + data.courses.map(c => '<option value="' + c.id + '" ' + (editingLecture && editingLecture.courseId===c.id?'selected':'') + '>' + escapeHtml(c.name) + '</option>').join("") + '</select></div>' +
+        '<div class="field"><label>Lecturer</label><select name="lecturerId" id="lectureLecturerSelect"></select></div>' +
+      '</div>' +
+      '<div class="form-row">' +
+        '<div class="field"><label>Title</label><input required name="title" value="' + (editingLecture ? escapeAttr(editingLecture.title) : "") + '" placeholder="e.g. Capital budgeting" /></div>' +
+        '<div class="field" style="max-width:170px;"><label>Date</label><input required type="date" name="date" value="' + (editingLecture ? editingLecture.date : "") + '" /></div>' +
+      '</div>' +
+      '<div class="form-row"><div class="field"><label>Topic (optional)</label><input name="topic" value="' + (editingLecture ? escapeAttr(editingLecture.topic||"") : "") + '" placeholder="e.g. NPV vs IRR" /></div></div>' +
+      '<div class="form-row" style="gap:8px;"><button class="btn" type="submit">' + (editingLecture ? "Save changes" : "Add lecture") + '</button>' +
+      (editingLecture ? '<button class="btn ghost" type="button" id="cancelLectureEdit">Cancel</button>' : '') + '</div></form></div>'
+    ) : (role === "governor" ? '<div class="panel"><div class="empty">Add a course first under the Courses tab before logging lectures.</div></div>' : "");
+
+    if(!lec){
+      return addForm + '<div class="panel"><div class="empty">No lectures yet. ' + (role==="governor" ? "Add one above to begin taking attendance." : "Check back once the Governor logs a session.") + '</div></div>';
+    }
+
+    const stats = lectureStats(lec.id);
+    const rows = data.students.map(s => {
+      const rec = getRecord(lec.id, s.id);
+      const toggle = role === "governor"
+        ? '<button class="chalk-toggle ' + rec.status + '" data-toggle-student="' + s.id + '" title="Click to change status">' + (rec.status==="present" ? checkIcon() : rec.status==="absent" ? crossIcon() : dotIcon()) + '</button>'
+        : '<span class="status-tag ' + rec.status + '">' + rec.status + '</span>';
+      const methodLabel = rec.method === "self" ? ('self-signed · ' + fmtTime(rec.at)) : (rec.method === "manual" ? "manual" : "");
+      return '<div class="roster-row"><div class="who"><span class="roll">' + s.roll + '</span><span class="name">' + escapeHtml(s.name) + '</span>' + (methodLabel ? '<span class="method-tag">' + methodLabel + '</span>' : '') + '</div>' +
+        (role === "governor" ? '<span class="status-tag ' + rec.status + '">' + rec.status + '</span>' : '') + toggle + '</div>';
+    }).join("");
+
+    const govActions = role === "governor" ? (
+      '<div class="toolbar" style="margin-top:14px; margin-bottom:0;">' +
+      '<button class="btn ghost small" id="markAllPresent">Mark all present</button>' +
+      '<button class="btn ghost small" id="clearMarks">Clear marks</button>' +
+      '<button class="btn ghost small" id="editThisLecture">Edit session</button>' +
+      '<button class="btn ghost small" id="exportLectureCsv">Export CSV</button>' +
+      '<button class="btn ghost small" id="exportLecturePdf">Export PDF</button>' +
+      '<button class="btn danger small" id="deleteThisLecture">Delete session</button>' +
+      '</div>'
+    ) : "";
+
+    const linkPanel = role === "governor" ? renderCheckinLinkPanel(lec) : "";
+
+    return addForm + linkPanel +
+      '<div class="panel"><h2>Attendance</h2>' +
+      '<p class="hint">' + (role==="governor" ? "Click a mark to cycle: unmarked → present → absent, or share a self check-in link below." : "Read-only view of the class roll for this session.") + '</p>' +
+      '<div class="toolbar"><select id="attendanceCourseFilter">' + courseFilterOptions + '</select><select id="lectureSelect" style="min-width:280px;">' + lecOptions + '</select></div>' +
+      '<div class="lecture-meta" style="margin-bottom:14px;">' + (lec.topic ? escapeHtml(lec.topic)+" · " : "") + fmtDate(lec.date) + " · Session " + sessionNumber(lec) + (lecturerName(lec.courseId, lec.lecturerId) ? " · " + escapeHtml(lecturerName(lec.courseId, lec.lecturerId)) : "") + '</div>' +
+      '<div class="stat-row" style="grid-template-columns:repeat(3,1fr); margin-bottom:4px;">' +
+        '<div class="stat"><div class="num" style="color:var(--green);">' + stats.present + '</div><div class="lbl">Present</div></div>' +
+        '<div class="stat"><div class="num" style="color:var(--rose);">' + stats.absent + '</div><div class="lbl">Absent</div></div>' +
+        '<div class="stat"><div class="num" style="color:var(--chalk-faint);">' + stats.unmarked + '</div><div class="lbl">Unmarked</div></div>' +
+      '</div>' + govActions +
+      '<div style="margin-top:14px;">' + (data.students.length === 0 ? '<div class="empty">No students on the roster yet.</div>' : rows) + '</div>' +
+      '</div>';
+  }
+
+  function renderCheckinLinkPanel(lec){
+    const sessions = data.attendanceSessions.filter(s => s.lectureId === lec.id).sort((a,b) => b.createdAt.localeCompare(a.createdAt));
+    const now = new Date();
+    const nowLocal = new Date(now.getTime() - now.getTimezoneOffset()*60000).toISOString().slice(0,16);
+    const sessionCards = sessions.map(s => {
+      const starts = new Date(s.startsAt), ends = new Date(s.endsAt);
+      const status = now < starts ? "scheduled" : (now > ends ? "expired" : "active");
+      const signedCount = data.students.filter(st => { const r = getRecord(lec.id, st.id); return r.method === "self" && r.at && r.at >= s.startsAt && r.at <= s.endsAt; }).length;
+      return '<div class="session-card"><div class="session-top">' +
+        '<span class="code-pill">' + s.code + '</span>' +
+        '<span class="badge ' + status + '">' + status + '</span>' +
+        '<span class="lecture-meta">' + fmtDateTime(s.startsAt) + " → " + fmtDateTime(s.endsAt) + '</span>' +
+        '<span class="lecture-meta">' + signedCount + ' signed</span>' +
+        '<button class="btn ghost small" data-copy-link="' + s.code + '">Copy link</button>' +
+        '<button class="btn ghost small" data-preview-checkin="' + s.code + '">Preview</button>' +
+        '</div>' +
+        '<div class="link-row"><input type="text" readonly value="' + escapeAttr(checkinUrl(s.code)) + '" onclick="this.select()" /></div>' +
+      '</div>';
+    }).join("");
+
+    return '<div class="panel" style="margin-bottom:18px;"><h2>Self check-in links</h2>' +
+      '<p class="hint">Generate a link students can open to sign their own attendance. It only accepts sign-ins during the window you set below.</p>' +
+      '<form id="sessionForm">' +
+        '<div class="form-row">' +
+          '<div class="field"><label>Opens at</label><input required type="datetime-local" name="startsAt" value="' + nowLocal + '" /></div>' +
+          '<div class="field" style="max-width:160px;"><label>Duration (minutes)</label><input required type="number" min="1" name="duration" value="15" /></div>' +
+        '</div>' +
+        '<button class="btn" type="submit">Generate check-in link</button>' +
+      '</form>' +
+      (sessions.length ? '<div style="margin-top:16px;">' + sessionCards + '</div>' : '<p class="hint" style="margin-top:10px;">No links generated for this session yet.</p>') +
+      '</div>';
+  }
+
+  // ---------- MATERIALS ----------
+
+  function renderMaterials(){
+    const editingMaterial = editingMaterialId ? data.materials.find(m => m.id === editingMaterialId) : null;
+    const lecOptionsFor = (courseId) => '<option value="">General / not tied to a lecture</option>' + data.lectures.filter(l => !courseId || l.courseId === courseId).map(l => '<option value="' + l.id + '">' + escapeHtml(l.title) + " — " + fmtDate(l.date) + '</option>').join("");
+
+    const addForm = role === "governor" ? (
+      '<div class="panel" style="margin-bottom:18px;"><h2>' + (editingMaterial ? "Edit material" : "Share reading material") + '</h2>' +
+      '<p class="hint">Attach a title, type, and optional link. Files themselves should be hosted elsewhere (e.g. Drive) and linked here.</p>' +
+      '<form id="materialForm"><input type="hidden" name="id" value="' + (editingMaterial ? editingMaterial.id : "") + '" />' +
+      '<div class="form-row">' +
+        '<div class="field" style="flex:2;"><label>Title</label><input required name="title" value="' + (editingMaterial?escapeAttr(editingMaterial.title):"") + '" placeholder="e.g. HBR — Managing Oneself" /></div>' +
+        '<div class="field" style="max-width:150px;"><label>Type</label><select name="type">' + ["Case Study","Article","Slide Deck","Book Chapter","Video","Other"].map(t => '<option ' + (editingMaterial && editingMaterial.type===t?'selected':'') + '>' + t + '</option>').join("") + '</select></div>' +
+        '<div class="field"><label>Course</label><select name="courseId" id="materialCourseSelect"><option value="">General</option>' + data.courses.map(c => '<option value="' + c.id + '" ' + (editingMaterial && editingMaterial.courseId===c.id?'selected':'') + '>' + escapeHtml(c.name) + '</option>').join("") + '</select></div>' +
+      '</div>' +
+      '<div class="form-row">' +
+        '<div class="field"><label>Linked lecture</label><select name="lectureId" id="materialLectureSelect">' + lecOptionsFor(editingMaterial ? editingMaterial.courseId : "") + '</select></div>' +
+        '<div class="field"><label>Link (optional)</label><input type="url" name="link" value="' + (editingMaterial?escapeAttr(editingMaterial.link||""):"") + '" placeholder="https://..." /></div>' +
+      '</div>' +
+      '<div class="form-row"><div class="field"><label>Tags (comma separated)</label><input name="tags" value="' + (editingMaterial?escapeAttr((editingMaterial.tags||[]).join(", ")):"") + '" placeholder="pre-read, core, optional" /></div></div>' +
+      '<div class="form-row"><div class="field"><label>Notes (optional)</label><textarea name="notes" placeholder="Why it matters, what to focus on...">' + (editingMaterial?escapeHtml(editingMaterial.notes||""):"") + '</textarea></div></div>' +
+      '<div class="form-row" style="gap:8px;"><button class="btn" type="submit">' + (editingMaterial ? "Save changes" : "Add material") + '</button>' + (editingMaterial ? '<button class="btn ghost" type="button" id="cancelMaterialEdit">Cancel</button>' : '') + '</div>' +
+      '</form></div>'
+    ) : "";
+
+    let items = [...data.materials];
+    if(materialsCourseFilter) items = items.filter(m => m.courseId === materialsCourseFilter);
+    if(materialsTypeFilter) items = items.filter(m => m.type === materialsTypeFilter);
+    if(materialsSearch.trim()){
+      const q = materialsSearch.trim().toLowerCase();
+      items = items.filter(m => (m.title||"").toLowerCase().includes(q) || (m.notes||"").toLowerCase().includes(q) || (m.tags||[]).some(t => t.toLowerCase().includes(q)));
+    }
+    items.sort((a,b) => (b.date||"").localeCompare(a.date||""));
+
+    const list = items.map(m => {
+      const lec = data.lectures.find(l => l.id === m.lectureId);
+      const course = courseOf(m.courseId);
+      return '<div class="material-card"><span class="material-type" style="' + (course ? "border-color:" + course.color + "; color:" + course.color + ";" : "") + '">' + escapeHtml(m.type) + '</span>' +
+        '<div class="material-body"><p class="mtitle">' + escapeHtml(m.title) + '</p>' +
+        '<div class="msub">' + (course ? escapeHtml(course.name)+" · " : "") + (lec ? escapeHtml(lec.title) : "General") + " · " + fmtDate(m.date) + '</div>' +
+        (m.notes ? '<p class="mnotes">' + escapeHtml(m.notes) + '</p>' : "") +
+        (m.tags||[]).map(t => '<span class="tag-chip">' + escapeHtml(t) + '</span>').join("") +
+        (m.link ? '<div style="margin-top:6px;"><a href="' + escapeAttr(m.link) + '" target="_blank" rel="noopener">Open resource →</a></div>' : "") +
+        '</div>' + (role === "governor" ? '<div class="list-actions"><button class="btn small ghost" data-edit-material="' + m.id + '">Edit</button><button class="btn small danger" data-delete-material="' + m.id + '">Remove</button></div>' : "") +
+      '</div>';
+    }).join("");
+
+    const typeFilterOptions = '<option value="">All types</option>' + ["Case Study","Article","Slide Deck","Book Chapter","Video","Other"].map(t => '<option ' + (materialsTypeFilter===t?'selected':'') + '>' + t + '</option>').join("");
+    const courseFilterOptions = '<option value="">All courses</option>' + data.courses.map(c => '<option value="' + c.id + '" ' + (materialsCourseFilter===c.id?'selected':'') + '>' + escapeHtml(c.name) + '</option>').join("");
+
+    return addForm + '<div class="panel"><h2>Reading materials</h2>' +
+      '<div class="toolbar"><input type="text" id="materialsSearch" placeholder="Search title, notes, tags..." value="' + escapeAttr(materialsSearch) + '" /><select id="materialsCourseFilter">' + courseFilterOptions + '</select><select id="materialsTypeFilter">' + typeFilterOptions + '</select></div>' +
+      '<p class="hint">' + items.length + ' item' + (items.length===1?'':'s') + ' shown' + (data.materials.length !== items.length ? ' (of ' + data.materials.length + ' total)' : '') + '.</p>' +
+      (items.length === 0 ? '<div class="empty">Nothing matches yet.</div>' : list) + '</div>';
+  }
+
+  // ---------- ASSIGNMENTS ----------
+
+  function renderAssignments(){
+    const editingAssignment = editingAssignmentId ? data.assignments.find(a => a.id === editingAssignmentId) : null;
+    const addForm = role === "governor" ? (
+      '<div class="panel" style="margin-bottom:18px;"><h2>' + (editingAssignment ? "Edit assignment" : "Upload an assignment") + '</h2>' +
+      '<form id="assignmentForm"><input type="hidden" name="id" value="' + (editingAssignment ? editingAssignment.id : "") + '" />' +
+      '<div class="form-row">' +
+        '<div class="field" style="flex:2;"><label>Title</label><input required name="title" value="' + (editingAssignment?escapeAttr(editingAssignment.title):"") + '" placeholder="e.g. Case write-up" /></div>' +
+        '<div class="field"><label>Course</label><select required name="courseId">' + data.courses.map(c => '<option value="' + c.id + '" ' + (editingAssignment && editingAssignment.courseId===c.id?'selected':'') + '>' + escapeHtml(c.name) + '</option>').join("") + '</select></div>' +
+        '<div class="field" style="max-width:170px;"><label>Due date</label><input required type="date" name="dueDate" value="' + (editingAssignment?editingAssignment.dueDate:"") + '" /></div>' +
+      '</div>' +
+      '<div class="form-row"><div class="field"><label>Description</label><textarea name="description" placeholder="Instructions, requirements, rubric...">' + (editingAssignment?escapeHtml(editingAssignment.description||""):"") + '</textarea></div></div>' +
+      '<div class="form-row"><div class="field"><label>Link (optional)</label><input type="url" name="link" value="' + (editingAssignment?escapeAttr(editingAssignment.link||""):"") + '" placeholder="https://... (submission portal, brief doc)" /></div></div>' +
+      '<div class="form-row" style="gap:8px;"><button class="btn" type="submit">' + (editingAssignment ? "Save changes" : "Post assignment") + '</button>' + (editingAssignment ? '<button class="btn ghost" type="button" id="cancelAssignmentEdit">Cancel</button>' : '') + '</div>' +
+      '</form></div>'
+    ) : "";
+
+    let items = [...data.assignments];
+    if(assignmentsCourseFilter) items = items.filter(a => a.courseId === assignmentsCourseFilter);
+    items.sort((a,b) => (a.dueDate||"").localeCompare(b.dueDate||""));
+    const today = new Date().toISOString().slice(0,10);
+
+    const list = items.map(a => {
+      const course = courseOf(a.courseId);
+      const overdue = a.dueDate && a.dueDate < today;
+      return '<div class="assignment-card"><h3>' + (overdue ? '<span class="overdue-badge">Overdue</span>' : '') + escapeHtml(a.title) + '</h3>' +
+        '<div class="assignment-meta">' + (course ? escapeHtml(course.name) + " · " : "") + 'Due ' + fmtDate(a.dueDate) + '</div>' +
+        (a.description ? '<div class="assignment-body">' + escapeHtml(a.description) + '</div>' : '') +
+        (a.link ? '<div style="margin-top:6px;"><a href="' + escapeAttr(a.link) + '" target="_blank" rel="noopener" style="color:var(--brass); font-size:13px;">Open link →</a></div>' : '') +
+        (role === "governor" ? '<div class="list-actions" style="margin-top:8px;"><button class="btn small ghost" data-edit-assignment="' + a.id + '">Edit</button><button class="btn small danger" data-delete-assignment="' + a.id + '">Remove</button></div>' : '') +
+      '</div>';
+    }).join("");
+
+    const courseFilterOptions = '<option value="">All courses</option>' + data.courses.map(c => '<option value="' + c.id + '" ' + (assignmentsCourseFilter===c.id?'selected':'') + '>' + escapeHtml(c.name) + '</option>').join("");
+
+    return addForm + '<div class="panel"><h2>Assignments</h2>' +
+      '<div class="toolbar"><select id="assignmentsCourseFilter">' + courseFilterOptions + '</select></div>' +
+      '<p class="hint">' + items.length + ' assignment' + (items.length===1?'':'s') + '.</p>' +
+      (items.length === 0 ? '<div class="empty">Nothing posted yet.</div>' : list) + '</div>';
+  }
+
+  // ---------- ANNOUNCEMENTS ----------
+
+  function renderAnnouncements(){
+    const addForm = role === "governor" ? (
+      '<div class="panel" style="margin-bottom:18px;"><h2>Post an announcement</h2>' +
+      '<form id="announceForm">' +
+      '<div class="form-row"><div class="field"><label>Title</label><input required name="title" placeholder="e.g. Session moved to Room 4B" /></div></div>' +
+      '<div class="form-row"><div class="field"><label>Message</label><textarea required name="body" placeholder="Details for the class..."></textarea></div></div>' +
+      '<div class="form-row" style="align-items:center;"><label style="display:flex; align-items:center; gap:6px; font-size:13px; color:var(--chalk-dim);"><input type="checkbox" name="pinned" style="width:auto;" /> Pin to top</label></div>' +
+      '<button class="btn" type="submit">Post</button></form></div>'
+    ) : "";
+
+    const items = [...data.announcements].sort((a,b) => (b.pinned - a.pinned) || (b.date||"").localeCompare(a.date||""));
+    const list = items.map(a => '<div class="announce-card"><h3>' + (a.pinned ? '<span class="pin">Pinned</span>' : '') + escapeHtml(a.title) + '</h3>' +
+      '<div class="announce-meta">' + fmtDate(a.date) + '</div><div class="announce-body">' + escapeHtml(a.body) + '</div>' +
+      (role === "governor" ? '<div class="list-actions" style="margin-top:8px;"><button class="btn small ghost" data-toggle-pin="' + a.id + '">' + (a.pinned ? "Unpin" : "Pin") + '</button><button class="btn small danger" data-delete-announce="' + a.id + '">Remove</button></div>' : '') +
+      '</div>').join("");
+
+    return addForm + '<div class="panel"><h2>Noticeboard</h2><p class="hint">' + items.length + ' announcement' + (items.length===1?'':'s') + '.</p>' + (items.length === 0 ? '<div class="empty">Nothing posted yet.</div>' : list) + '</div>';
+  }
+
+  // ---------- COURSES ----------
+
+  function renderCourses(){
+    const editingCourse = editingCourseId ? data.courses.find(c => c.id === editingCourseId) : null;
+    const addForm = role === "governor" ? (
+      '<div class="panel" style="margin-bottom:18px;"><h2>' + (editingCourse ? "Edit course" : "Add a course") + '</h2>' +
+      '<form id="courseForm"><input type="hidden" name="id" value="' + (editingCourse ? editingCourse.id : "") + '" />' +
+      '<div class="form-row">' +
+        '<div class="field"><label>Course code</label><input name="code" value="' + (editingCourse?escapeAttr(editingCourse.code||""):"") + '" placeholder="e.g. STRAT-601" /></div>' +
+        '<div class="field" style="flex:2;"><label>Course name</label><input required name="name" value="' + (editingCourse?escapeAttr(editingCourse.name):"") + '" placeholder="e.g. Marketing Management" /></div>' +
+      '</div>' +
+      '<div class="form-row"><div class="field"><label>Color tag</label><div style="display:flex; gap:8px; padding-top:4px;">' +
+        COURSE_COLORS.map(col => '<label style="cursor:pointer;"><input type="radio" name="color" value="' + col + '" ' + (((editingCourse && editingCourse.color===col) || (!editingCourse && col===COURSE_COLORS[0])) ? "checked" : "") + ' style="display:none;" class="colorRadio" /><span class="course-dot" data-swatch="' + col + '" style="background:' + col + '; width:22px; height:22px; outline:2px solid transparent;"></span></label>').join("") +
+      '</div></div></div>' +
+      '<div class="form-row" style="gap:8px;"><button class="btn" type="submit">' + (editingCourse ? "Save changes" : "Add course") + '</button>' + (editingCourse ? '<button class="btn ghost" type="button" id="cancelCourseEdit">Cancel</button>' : '') + '</div>' +
+      '</form></div>'
+    ) : "";
+
+    const cards = data.courses.map(c => {
+      const lecCount = data.lectures.filter(l => l.courseId === c.id).length;
+      const matCount = data.materials.filter(m => m.courseId === c.id).length;
+      const lecturerNames = (c.lecturers||[]).map(l => l.name).join(", ") || "No lecturers added";
+      return '<div class="course-card">' +
+        (role==="governor" ? '<div class="cactions"><button class="btn small ghost" data-edit-course="' + c.id + '">Edit</button><button class="btn small danger" data-delete-course="' + c.id + '">✕</button></div>' : '') +
+        '<h3><span class="course-dot" style="background:' + c.color + '"></span>' + escapeHtml(c.name) + '</h3>' +
+        '<div class="ccode">' + escapeHtml(c.code||"—") + '</div>' +
+        '<div class="lecturers">' + escapeHtml(lecturerNames) + '</div>' +
+        '<div class="cstats"><span>' + lecCount + ' lecture' + (lecCount===1?'':'s') + '</span><span>' + matCount + ' material' + (matCount===1?'':'s') + '</span></div>' +
+        '<button class="btn ghost small" data-open-course="' + c.id + '">Lecturers &amp; outline</button>' +
+      '</div>';
+    }).join("");
+
+    return addForm + '<div class="panel"><h2>Courses</h2><p class="hint">' + data.courses.length + ' course' + (data.courses.length===1?'':'s') + ' this term. Open a course to manage its lecturers and outline.</p>' +
+      (data.courses.length === 0 ? '<div class="empty">No courses yet. Add one above.</div>' : '<div class="course-grid">' + cards + '</div>') + '</div>';
+  }
+
+  function renderCourseDrawer(){
+    if(!drawerCourseId) return "";
+    const c = courseOf(drawerCourseId);
+    if(!c) return "";
+    const lecturerChips = (c.lecturers||[]).map(l => '<span class="lecturer-chip">' + escapeHtml(l.name) + (l.email ? ' · ' + escapeHtml(l.email) : '') + (role==="governor" ? '<button data-remove-lecturer="' + l.id + '" title="Remove">×</button>' : '') + '</span>').join("");
+    return '<div class="drawer-overlay" id="courseDrawerOverlay"><div class="drawer">' +
+      '<button class="close" id="closeCourseDrawer">×</button>' +
+      '<h2>' + escapeHtml(c.name) + '</h2><p class="hint" style="margin-bottom:16px;">' + escapeHtml(c.code||"") + '</p>' +
+      '<p class="hint" style="margin-bottom:6px; text-transform:uppercase; letter-spacing:.07em; font-size:11px;">Lecturers</p>' +
+      '<div style="margin-bottom:10px;">' + (lecturerChips || '<span class="hint">No lecturers added yet.</span>') + '</div>' +
+      (role === "governor" ? (
+        '<form id="lecturerForm" class="form-row" style="margin-bottom:20px;">' +
+        '<div class="field"><label>Name</label><input required name="name" placeholder="Prof. Name" /></div>' +
+        '<div class="field"><label>Email</label><input type="email" name="email" placeholder="optional" /></div>' +
+        '<div style="align-self:flex-end;"><button class="btn small" type="submit">Add</button></div>' +
+        '</form>'
+      ) : "") +
+      '<p class="hint" style="margin-bottom:6px; text-transform:uppercase; letter-spacing:.07em; font-size:11px;">Course outline</p>' +
+      (role === "governor" ? (
+        '<form id="outlineForm">' +
+        '<div class="form-row"><div class="field"><label>Upload a text/markdown file (optional)</label><input type="file" name="file" accept=".txt,.md,text/plain,text/markdown" id="outlineFileInput" /></div></div>' +
+        '<div class="form-row"><div class="field"><label>Outline text</label><textarea name="outlineText" rows="8" placeholder="Paste or type the syllabus / weekly outline here">' + escapeHtml(c.outlineText||"") + '</textarea></div></div>' +
+        '<div class="form-row"><div class="field"><label>Or a link to a hosted document (PDF, Drive, etc.)</label><input type="url" name="outlineLink" value="' + escapeAttr(c.outlineLink||"") + '" placeholder="https://..." /></div></div>' +
+        '<button class="btn small" type="submit">Save outline</button>' +
+        '</form>'
+      ) : (
+        (c.outlineText ? '<div class="assignment-body" style="white-space:pre-wrap; margin-bottom:10px;">' + escapeHtml(c.outlineText) + '</div>' : '<p class="hint">No outline text uploaded yet.</p>') +
+        (c.outlineLink ? '<a href="' + escapeAttr(c.outlineLink) + '" target="_blank" rel="noopener" style="color:var(--brass); font-size:13px;">Open full outline document →</a>' : '')
+      )) +
+      '</div></div>';
+  }
+
+  // ---------- ROSTER ----------
+
+  function renderRoster(){
+    const addForm = role === "governor" ? (
+      '<div class="panel" style="margin-bottom:18px;"><h2>Add a student</h2>' +
+      '<form id="studentForm"><div class="form-row">' +
+        '<div class="field" style="max-width:110px;"><label>Roll no.</label><input required name="roll" placeholder="04" /></div>' +
+        '<div class="field"><label>Name</label><input required name="name" placeholder="Full name" /></div>' +
+        '<div class="field"><label>Email (optional)</label><input type="email" name="email" placeholder="name@cohort.edu" /></div>' +
+      '</div><button class="btn" type="submit">Add to roster</button></form></div>' +
+      '<div class="panel" style="margin-bottom:18px;"><h2>Upload the class list</h2>' +
+      '<p class="hint">Upload a CSV (roll, name, email) or paste rows below — one student per line. Matching roll numbers will be updated.</p>' +
+      '<form id="importForm">' +
+        '<div class="form-row"><div class="field"><label>CSV file</label><input type="file" name="file" accept=".csv,text/csv" id="csvFileInput" /></div></div>' +
+        '<div class="form-row"><div class="field"><label>Or paste CSV rows</label><textarea name="csvText" rows="5" placeholder="01, A. Bello, a.bello@cohort.edu&#10;02, D. Okafor, d.okafor@cohort.edu"></textarea></div></div>' +
+        '<button class="btn" type="submit">Import students</button>' +
+      '</form>' +
+      (importSummary ? '<p class="hint" style="margin-top:10px; color:var(--brass);">' + escapeHtml(importSummary) + '</p>' : '') +
+      '</div>'
+    ) : "";
+
+    const rows = data.students.map(s => {
+      const st = studentStats(s.id);
+      const risk = st.pct !== null && st.pct < RISK_THRESHOLD;
+      return '<tr class="clickable" data-open-student="' + s.id + '">' +
+        '<td class="roll">' + s.roll + '</td>' +
+        '<td style="font-family:\'Fraunces\',serif; font-size:14.5px;">' + escapeHtml(s.name) + (risk ? '<span class="risk-badge">At risk</span>' : '') + '</td>' +
+        '<td class="roll">' + escapeHtml(s.email||"—") + '</td>' +
+        '<td class="roll">' + (st.pct===null ? "—" : st.pct+"%") + '</td>' +
+        (role === "governor" ? '<td><button class="btn small danger" data-delete-student="' + s.id + '">Remove</button></td>' : '') +
+      '</tr>';
+    }).join("");
+
+    return addForm + '<div class="panel"><h2>Class roster</h2>' +
+      '<p class="hint">' + data.students.length + ' student' + (data.students.length===1?'':'s') + ' enrolled. Click a row for their full attendance history.</p>' +
+      (role === "governor" && data.students.length ? '<div class="toolbar" style="margin-bottom:10px;"><button class="btn ghost small" id="exportRosterCsv">Export CSV</button><button class="btn ghost small" id="exportRosterPdf">Export PDF</button></div>' : '') +
+      (data.students.length === 0 ? '<div class="empty">No students added yet.</div>' :
+        '<table class="ledger"><thead><tr><th>Roll</th><th>Name</th><th>Email</th><th>Attendance</th>' + (role==="governor"?'<th></th>':'') + '</tr></thead><tbody>' + rows + '</tbody></table>') +
+      '</div>';
+  }
+
+  function renderStudentDrawer(){
+    if(!drawerStudentId) return "";
+    const s = data.students.find(x => x.id === drawerStudentId);
+    if(!s) return "";
+    const st = studentStats(s.id);
+    const hist = studentHistory(s.id);
+    return '<div class="drawer-overlay" id="studentDrawerOverlay"><div class="drawer">' +
+      '<button class="close" id="closeStudentDrawer">×</button>' +
+      '<h2>' + escapeHtml(s.name) + '</h2><p class="hint" style="margin-bottom:14px;">Roll ' + s.roll + (s.email ? ' · ' + escapeHtml(s.email) : '') + '</p>' +
+      '<div class="stat-row" style="grid-template-columns:repeat(3,1fr);">' +
+        '<div class="stat"><div class="num">' + (st.pct===null?"—":st.pct+"%") + '</div><div class="lbl">Attendance</div></div>' +
+        '<div class="stat"><div class="num">' + st.present + '</div><div class="lbl">Present</div></div>' +
+        '<div class="stat"><div class="num">' + (st.total-st.present) + '</div><div class="lbl">Absent</div></div>' +
+      '</div><p class="hint" style="margin-top:18px; margin-bottom:8px;">Session-by-session</p>' +
+      (hist.length === 0 ? '<div class="empty">No sessions yet.</div>' : hist.map(h => '<div class="roster-row"><div class="who"><span class="name" style="font-size:14px;">' + escapeHtml(h.lecture.title) + '</span><span class="lecture-meta">' + fmtDate(h.lecture.date) + '</span></div><span class="status-tag ' + h.rec.status + '">' + h.rec.status + '</span></div>').join("")) +
+      '</div></div>';
+  }
+
+  // ---------- MY ATTENDANCE (student personalized) ----------
+
+  function renderMyAttendance(){
+    if(!myIdentityId) return '<div class="panel"><div class="empty">Pick who you are from the "I am" menu at the top to see your personal record.</div></div>';
+    const s = data.students.find(x => x.id === myIdentityId);
+    if(!s) return '<div class="panel"><div class="empty">Student not found.</div></div>';
+    const st = studentStats(s.id);
+    const hist = studentHistory(s.id);
+    const risk = st.pct !== null && st.pct < RISK_THRESHOLD;
+    return '<div class="panel"><h2>My attendance</h2><p class="hint">' + escapeHtml(s.name) + ' · Roll ' + s.roll + '</p>' +
+      '<div class="stat-row">' +
+        '<div class="stat"><div class="num" style="' + (risk?"color:var(--rose);":"") + '">' + (st.pct===null?"—":st.pct+"%") + '</div><div class="lbl">Overall attendance</div></div>' +
+        '<div class="stat"><div class="num">' + st.present + '</div><div class="lbl">Sessions present</div></div>' +
+        '<div class="stat"><div class="num">' + (st.total - st.present) + '</div><div class="lbl">Sessions absent</div></div>' +
+      '</div>' +
+      (risk ? '<div class="empty" style="border-color:rgba(193,102,107,0.4); color:var(--rose);">Your attendance is below the ' + RISK_THRESHOLD + '% mark. Reach out to the Governor if any sessions are marked incorrectly.</div>' : '') +
+      '<h2 style="margin-top:22px;">Session history</h2>' +
+      (hist.length === 0 ? '<div class="empty">No lectures logged yet.</div>' : hist.map(h => '<div class="roster-row"><div class="who"><span class="name">' + escapeHtml(h.lecture.title) + '</span><span class="lecture-meta">' + escapeHtml(courseOf(h.lecture.courseId)?.name||"") + " · " + fmtDate(h.lecture.date) + '</span></div><span class="status-tag ' + h.rec.status + '">' + h.rec.status + '</span></div>').join("")) +
+      '</div>';
+  }
+
+  // ---------- GOVERNOR LOGIN ----------
+
+  function renderLoginModal(){
+    if(!loginOpen) return "";
+    return '<div class="drawer-overlay" id="loginDrawerOverlay"><div class="drawer" style="width:min(360px,92vw);">' +
+      '<button class="close" id="closeLoginDrawer">×</button>' +
+      '<h2>Governor sign-in</h2>' +
+      '<p class="hint" style="margin-bottom:16px;">Enter the Governor password to add courses, take attendance, and post materials or notices. Students never need this.</p>' +
+      '<form id="loginForm">' +
+        '<div class="field"><label>Password</label><input required type="password" name="password" autofocus /></div>' +
+        (loginError ? '<p class="hint" style="color:var(--rose); margin-bottom:10px;">' + escapeHtml(loginError) + '</p>' : '') +
+        '<button class="btn" type="submit" style="width:100%;">Sign in</button>' +
+      '</form>' +
+      '</div></div>';
+  }
+
+  // ---------- CHECK-IN KIOSK ----------
+
+  function getCheckinCode(){
+    const m = location.hash.match(/^#checkin=([A-Za-z0-9]+)/);
+    return m ? m[1].toUpperCase() : null;
+  }
+
+  function renderKiosk(code){
+    const session = data.attendanceSessions.find(s => s.code === code);
+    if(!session){
+      return '<div class="kiosk-card"><span class="mark">Roll Call</span><h1>Link not recognized</h1><p class="sub">This check-in code doesn\'t match an active session. Ask the Governor for the current link.</p><a class="kiosk-back" href="#" id="kioskBack">Open full app</a></div>';
+    }
+    const lec = data.lectures.find(l => l.id === session.lectureId);
+    const course = lec ? courseOf(lec.courseId) : null;
+    const now = new Date();
+    const starts = new Date(session.startsAt), ends = new Date(session.endsAt);
+
+    if(now < starts){
+      return '<div class="kiosk-card"><span class="mark">Roll Call</span><h1>' + escapeHtml(lec ? lec.title : "Session") + '</h1><p class="sub">' + escapeHtml(course ? course.name : "") + '</p><p class="sub">This check-in opens at ' + fmtDateTime(session.startsAt) + '.</p><a class="kiosk-back" href="#" id="kioskBack">Open full app</a></div>';
+    }
+    if(now > ends){
+      return '<div class="kiosk-card"><span class="mark">Roll Call</span><h1>Check-in closed</h1><p class="sub">' + escapeHtml(lec ? lec.title : "Session") + '</p><p class="sub">This attendance window closed at ' + fmtDateTime(session.endsAt) + '.</p><a class="kiosk-back" href="#" id="kioskBack">Open full app</a></div>';
+    }
+
+    const remainMs = ends - now;
+    const mm = Math.floor(remainMs/60000), ss = Math.floor((remainMs%60000)/1000);
+    const countdown = "Closes in " + String(mm).padStart(2,"0") + ":" + String(ss).padStart(2,"0");
+
+    if(myIdentityId){
+      const rec = getRecord(session.lectureId, myIdentityId);
+      if(rec.status === "present" && rec.method === "self"){
+        const s = data.students.find(x => x.id === myIdentityId);
+        return '<div class="kiosk-card"><span class="mark">Roll Call</span>' +
+          '<div class="kiosk-success">You\'re marked present ✓</div>' +
+          '<p class="sub">' + escapeHtml(s ? s.name : "") + ' · signed at ' + fmtTime(rec.at) + '</p>' +
+          '<p class="sub" style="margin-top:10px;">' + escapeHtml(lec ? lec.title : "") + '</p>' +
+          '<a class="kiosk-back" href="#" id="kioskBack">Open full app</a></div>';
+      }
+    }
+
+    const studentOptions = '<option value="">Select your name…</option>' + data.students.map(s => '<option value="' + s.id + '" ' + (s.id===myIdentityId?'selected':'') + '>' + escapeHtml(s.name) + ' (Roll ' + s.roll + ')</option>').join("");
+
+    return '<div class="kiosk-card"><span class="mark">Roll Call</span>' +
+      '<h1>' + escapeHtml(lec ? lec.title : "Session") + '</h1>' +
+      '<p class="sub">' + escapeHtml(course ? course.name : "") + (lec && lec.topic ? " · " + escapeHtml(lec.topic) : "") + '</p>' +
+      '<div class="countdown">' + countdown + '</div>' +
+      '<form id="kioskForm">' +
+        '<select name="studentId" required>' + studentOptions + '</select>' +
+        '<button class="btn" type="submit">Sign attendance</button>' +
+      '</form>' +
+      '<a class="kiosk-back" href="#" id="kioskBack">Open full app</a></div>';
+  }
+
+  // ---------- MAIN RENDER ----------
+
+  function render(){
+    const code = getCheckinCode();
+    document.body.classList.toggle("kiosk", !!code);
+
+    if(code){
+      document.getElementById("mainArea").innerHTML = "";
+      let host = document.getElementById("kioskHost");
+      if(!host){ host = document.createElement("div"); host.id = "kioskHost"; document.getElementById("appRoot").innerHTML = ""; document.getElementById("appRoot").appendChild(host); }
+      host.innerHTML = renderKiosk(code);
+      attachKioskEvents(code);
+      if(!tickTimer) tickTimer = setInterval(render, 1000);
+      return;
+    } else if(tickTimer){ clearInterval(tickTimer); tickTimer = null; }
+
+    // ensure normal app shell exists (in case we came back from kiosk mode)
+    if(!document.getElementById("classNameInput")) location.reload();
+
+    document.getElementById("classNameInput").value = data.className;
+    document.getElementById("classNameInput").readOnly = (role !== "governor");
+    document.getElementById("classSub").textContent = data.students.length + " students · " + data.courses.length + " courses · " + data.lectures.length + " lectures logged";
+
+    const sideNav = document.getElementById("sideNav");
+    let myTabBtn = sideNav.querySelector('[data-tab="mine"]');
+    if(role === "student"){
+      if(!myTabBtn){
+        myTabBtn = document.createElement("div");
+        myTabBtn.className = "navbtn";
+        myTabBtn.dataset.tab = "mine";
+        myTabBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.4" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M5 20c0-3.9 3.1-7 7-7s7 3.1 7 7" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg> My Attendance';
+        sideNav.insertBefore(myTabBtn, sideNav.children[1]);
+      }
+    } else if(myTabBtn){ myTabBtn.remove(); if(activeTab === "mine") activeTab = "dashboard"; }
+
+    document.getElementById("identityWrap").style.display = role === "student" ? "flex" : "none";
+    const identitySelect = document.getElementById("identitySelect");
+    identitySelect.innerHTML = '<option value="">Select your name…</option>' + data.students.map(s => '<option value="' + s.id + '" ' + (s.id===myIdentityId?'selected':'') + '>' + escapeHtml(s.name) + ' (Roll ' + s.roll + ')</option>').join("");
+
+    document.querySelectorAll("#sideNav .navbtn").forEach(b => b.classList.toggle("active", b.dataset.tab === activeTab));
+    document.querySelectorAll("#roleSeg button").forEach(b => b.classList.toggle("active", b.dataset.role === role));
+
+    const main = document.getElementById("mainArea");
+    if(activeTab === "dashboard") main.innerHTML = renderDashboard();
+    else if(activeTab === "attendance") main.innerHTML = renderAttendance();
+    else if(activeTab === "materials") main.innerHTML = renderMaterials();
+    else if(activeTab === "assignments") main.innerHTML = renderAssignments();
+    else if(activeTab === "announcements") main.innerHTML = renderAnnouncements();
+    else if(activeTab === "courses") main.innerHTML = renderCourses();
+    else if(activeTab === "roster") main.innerHTML = renderRoster();
+    else if(activeTab === "mine") main.innerHTML = renderMyAttendance();
+
+    let drawerHost = document.getElementById("drawerHost");
+    if(!drawerHost){ drawerHost = document.createElement("div"); drawerHost.id = "drawerHost"; document.body.appendChild(drawerHost); }
+    drawerHost.innerHTML = renderStudentDrawer() + renderCourseDrawer() + renderLoginModal();
+
+    const signOutBtn = document.getElementById("signOutBtn");
+    if(signOutBtn) signOutBtn.style.display = (role === "governor" && authToken) ? "inline" : "none";
+
+    attachEvents();
+  }
+
+  function attachKioskEvents(code){
+    const back = document.getElementById("kioskBack");
+    if(back) back.addEventListener("click", (e) => { e.preventDefault(); location.hash = ""; myIdentityId = null; render(); });
+    const form = document.getElementById("kioskForm");
+    if(form){
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const fd = new FormData(form);
+        const sid = fd.get("studentId");
+        if(!sid) return;
+        const submitBtn = form.querySelector('button[type="submit"]');
+        submitBtn.disabled = true; submitBtn.textContent = "Signing in…";
+        try{
+          const res = await fetch("/api/checkin/" + encodeURIComponent(code) + "/signin", {
+            method: "POST",
+            headers: {"Content-Type":"application/json"},
+            body: JSON.stringify({studentId: sid}),
+          });
+          const json = await res.json();
+          if(!res.ok){ alert(json.error || "Could not sign in."); submitBtn.disabled = false; submitBtn.textContent = "Sign attendance"; return; }
+          myIdentityId = sid;
+          if(!data.attendance[json.lectureId]) data.attendance[json.lectureId] = {};
+          data.attendance[json.lectureId][sid] = json.record;
+          if(typeof json.version === "number") stateVersion = json.version;
+        }catch(err){
+          alert("Could not reach the server — check your connection and try again.");
+          submitBtn.disabled = false; submitBtn.textContent = "Sign attendance";
+          return;
+        }
+        render();
+      });
+    }
+  }
+
+  function attachEvents(){
+    const lectureCourseSelect = document.getElementById("lectureCourseSelect");
+    const lectureLecturerSelect = document.getElementById("lectureLecturerSelect");
+    function refreshLecturerOptions(){
+      if(!lectureCourseSelect || !lectureLecturerSelect) return;
+      const course = courseOf(lectureCourseSelect.value);
+      const editingLecture = editingLectureId ? data.lectures.find(l => l.id === editingLectureId) : null;
+      lectureLecturerSelect.innerHTML = '<option value="">Unassigned</option>' + (course ? (course.lecturers||[]).map(l => '<option value="' + l.id + '" ' + (editingLecture && editingLecture.lecturerId===l.id?'selected':'') + '>' + escapeHtml(l.name) + '</option>').join("") : "");
+    }
+    if(lectureCourseSelect){ lectureCourseSelect.addEventListener("change", refreshLecturerOptions); refreshLecturerOptions(); }
+
+    const lectureForm = document.getElementById("lectureForm");
+    if(lectureForm){
+      lectureForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const fd = new FormData(lectureForm);
+        const id = fd.get("id");
+        const payload = {courseId: fd.get("courseId"), lecturerId: fd.get("lecturerId") || null, title: fd.get("title").trim(), date: fd.get("date"), topic: fd.get("topic").trim()};
+        if(id){ Object.assign(data.lectures.find(x => x.id === id), payload); editingLectureId = null; }
+        else { const l = Object.assign({id: uid()}, payload); data.lectures.push(l); data.attendance[l.id] = {}; selectedLectureId = l.id; }
+        await saveData(); render();
+      });
+    }
+    const cancelLectureEdit = document.getElementById("cancelLectureEdit");
+    if(cancelLectureEdit) cancelLectureEdit.addEventListener("click", () => { editingLectureId = null; render(); });
+
+    const attendanceCourseFilterEl = document.getElementById("attendanceCourseFilter");
+    if(attendanceCourseFilterEl) attendanceCourseFilterEl.addEventListener("change", () => { attendanceCourseFilter = attendanceCourseFilterEl.value; selectedLectureId = null; render(); });
+    const lectureSelect = document.getElementById("lectureSelect");
+    if(lectureSelect) lectureSelect.addEventListener("change", () => { selectedLectureId = lectureSelect.value; render(); });
+
+    document.querySelectorAll("[data-toggle-student]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const sid = btn.getAttribute("data-toggle-student");
+        const cur = getRecord(selectedLectureId, sid).status;
+        const next = cur === "unmarked" ? "present" : cur === "present" ? "absent" : "unmarked";
+        setRecord(selectedLectureId, sid, next, "manual");
+        await saveData(); render();
+      });
+    });
+
+    const markAllPresent = document.getElementById("markAllPresent");
+    if(markAllPresent) markAllPresent.addEventListener("click", async () => { data.students.forEach(s => setRecord(selectedLectureId, s.id, "present", "manual")); await saveData(); render(); });
+    const clearMarks = document.getElementById("clearMarks");
+    if(clearMarks) clearMarks.addEventListener("click", async () => { data.attendance[selectedLectureId] = {}; await saveData(); render(); });
+    const editThisLecture = document.getElementById("editThisLecture");
+    if(editThisLecture) editThisLecture.addEventListener("click", () => { editingLectureId = selectedLectureId; render(); window.scrollTo({top:0, behavior:"smooth"}); });
+    const deleteThisLecture = document.getElementById("deleteThisLecture");
+    if(deleteThisLecture) deleteThisLecture.addEventListener("click", async () => {
+      if(!confirm("Delete this lecture and its attendance record? This cannot be undone.")) return;
+      data.lectures = data.lectures.filter(l => l.id !== selectedLectureId);
+      delete data.attendance[selectedLectureId];
+      data.attendanceSessions = data.attendanceSessions.filter(s => s.lectureId !== selectedLectureId);
+      selectedLectureId = null; await saveData(); render();
+    });
+    const exportLectureCsvBtn = document.getElementById("exportLectureCsv");
+    if(exportLectureCsvBtn) exportLectureCsvBtn.addEventListener("click", () => {
+      const lec = data.lectures.find(l => l.id === selectedLectureId);
+      const rows = [["Roll","Name","Status","Method","Signed at"]].concat(data.students.map(s => { const r = getRecord(selectedLectureId, s.id); return [s.roll, s.name, r.status, r.method||"", r.at?fmtDateTime(r.at):""]; }));
+      downloadCsv("attendance_" + (lec.title||"session").replace(/\s+/g,"_") + ".csv", rows);
+    });
+    const exportLecturePdfBtn = document.getElementById("exportLecturePdf");
+    if(exportLecturePdfBtn) exportLecturePdfBtn.addEventListener("click", () => exportLecturePdf(selectedLectureId));
+
+    const sessionForm = document.getElementById("sessionForm");
+    if(sessionForm){
+      sessionForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const fd = new FormData(sessionForm);
+        const startsAt = new Date(fd.get("startsAt")).toISOString();
+        const duration = parseInt(fd.get("duration"), 10) || 15;
+        const endsAt = new Date(new Date(startsAt).getTime() + duration*60000).toISOString();
+        data.attendanceSessions.push({id: uid(), lectureId: selectedLectureId, code: genCode(), startsAt, endsAt, createdAt: new Date().toISOString()});
+        await saveData(); render();
+      });
+    }
+    document.querySelectorAll("[data-copy-link]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const ok = await copyText(checkinUrl(btn.getAttribute("data-copy-link")));
+        btn.textContent = ok ? "Copied!" : "Copy failed";
+        setTimeout(() => { btn.textContent = "Copy link"; }, 1500);
+      });
+    });
+    document.querySelectorAll("[data-preview-checkin]").forEach(btn => {
+      btn.addEventListener("click", () => { location.hash = "checkin=" + btn.getAttribute("data-preview-checkin"); render(); });
+    });
+
+    // Materials
+    const materialForm = document.getElementById("materialForm");
+    if(materialForm){
+      const courseSel = document.getElementById("materialCourseSelect");
+      const lecSel = document.getElementById("materialLectureSelect");
+      if(courseSel && lecSel){
+        courseSel.addEventListener("change", () => {
+          const cid = courseSel.value;
+          lecSel.innerHTML = '<option value="">General / not tied to a lecture</option>' + data.lectures.filter(l => !cid || l.courseId === cid).map(l => '<option value="' + l.id + '">' + escapeHtml(l.title) + " — " + fmtDate(l.date) + '</option>').join("");
+        });
+      }
+      materialForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const fd = new FormData(materialForm);
+        const id = fd.get("id");
+        const tags = fd.get("tags").split(",").map(t => t.trim()).filter(Boolean);
+        const payload = {title: fd.get("title").trim(), type: fd.get("type"), courseId: fd.get("courseId") || null, lectureId: fd.get("lectureId") || null, link: fd.get("link").trim(), notes: fd.get("notes").trim(), tags};
+        if(id){ Object.assign(data.materials.find(m => m.id === id), payload); editingMaterialId = null; }
+        else { data.materials.push(Object.assign({id: uid(), date: new Date().toISOString().slice(0,10)}, payload)); }
+        await saveData(); render();
+      });
+    }
+    const cancelMaterialEdit = document.getElementById("cancelMaterialEdit");
+    if(cancelMaterialEdit) cancelMaterialEdit.addEventListener("click", () => { editingMaterialId = null; render(); });
+    document.querySelectorAll("[data-edit-material]").forEach(btn => btn.addEventListener("click", () => { editingMaterialId = btn.getAttribute("data-edit-material"); render(); window.scrollTo({top:0, behavior:"smooth"}); }));
+    document.querySelectorAll("[data-delete-material]").forEach(btn => btn.addEventListener("click", async () => { data.materials = data.materials.filter(m => m.id !== btn.getAttribute("data-delete-material")); await saveData(); render(); }));
+    const materialsSearchEl = document.getElementById("materialsSearch");
+    if(materialsSearchEl){ materialsSearchEl.addEventListener("input", () => { materialsSearch = materialsSearchEl.value; render(); const el = document.getElementById("materialsSearch"); if(el){ el.focus(); el.selectionStart = el.selectionEnd = el.value.length; } }); }
+    const materialsCourseFilterEl = document.getElementById("materialsCourseFilter");
+    if(materialsCourseFilterEl) materialsCourseFilterEl.addEventListener("change", () => { materialsCourseFilter = materialsCourseFilterEl.value; render(); });
+    const materialsTypeFilterEl = document.getElementById("materialsTypeFilter");
+    if(materialsTypeFilterEl) materialsTypeFilterEl.addEventListener("change", () => { materialsTypeFilter = materialsTypeFilterEl.value; render(); });
+
+    // Assignments
+    const assignmentForm = document.getElementById("assignmentForm");
+    if(assignmentForm){
+      assignmentForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const fd = new FormData(assignmentForm);
+        const id = fd.get("id");
+        const payload = {courseId: fd.get("courseId"), title: fd.get("title").trim(), description: fd.get("description").trim(), dueDate: fd.get("dueDate"), link: fd.get("link").trim()};
+        if(id){ Object.assign(data.assignments.find(a => a.id === id), payload); editingAssignmentId = null; }
+        else { data.assignments.push(Object.assign({id: uid(), createdAt: new Date().toISOString().slice(0,10)}, payload)); }
+        await saveData(); render();
+      });
+    }
+    const cancelAssignmentEdit = document.getElementById("cancelAssignmentEdit");
+    if(cancelAssignmentEdit) cancelAssignmentEdit.addEventListener("click", () => { editingAssignmentId = null; render(); });
+    document.querySelectorAll("[data-edit-assignment]").forEach(btn => btn.addEventListener("click", () => { editingAssignmentId = btn.getAttribute("data-edit-assignment"); render(); window.scrollTo({top:0, behavior:"smooth"}); }));
+    document.querySelectorAll("[data-delete-assignment]").forEach(btn => btn.addEventListener("click", async () => { data.assignments = data.assignments.filter(a => a.id !== btn.getAttribute("data-delete-assignment")); await saveData(); render(); }));
+    const assignmentsCourseFilterEl = document.getElementById("assignmentsCourseFilter");
+    if(assignmentsCourseFilterEl) assignmentsCourseFilterEl.addEventListener("change", () => { assignmentsCourseFilter = assignmentsCourseFilterEl.value; render(); });
+
+    // Announcements
+    const announceForm = document.getElementById("announceForm");
+    if(announceForm){
+      announceForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const fd = new FormData(announceForm);
+        data.announcements.push({id: uid(), title: fd.get("title").trim(), body: fd.get("body").trim(), pinned: !!fd.get("pinned"), date: new Date().toISOString().slice(0,10)});
+        await saveData(); render();
+      });
+    }
+    document.querySelectorAll("[data-toggle-pin]").forEach(btn => btn.addEventListener("click", async () => { const a = data.announcements.find(x => x.id === btn.getAttribute("data-toggle-pin")); a.pinned = !a.pinned; await saveData(); render(); }));
+    document.querySelectorAll("[data-delete-announce]").forEach(btn => btn.addEventListener("click", async () => { data.announcements = data.announcements.filter(a => a.id !== btn.getAttribute("data-delete-announce")); await saveData(); render(); }));
+
+    // Courses
+    const courseForm = document.getElementById("courseForm");
+    if(courseForm){
+      courseForm.querySelectorAll(".colorRadio").forEach(r => {
+        const dot = r.nextElementSibling;
+        if(r.checked) dot.style.outline = "2px solid var(--chalk)";
+        r.addEventListener("change", () => { courseForm.querySelectorAll(".course-dot").forEach(d => d.style.outline = "2px solid transparent"); if(r.checked) dot.style.outline = "2px solid var(--chalk)"; });
+      });
+      courseForm.querySelectorAll(".course-dot").forEach(dot => dot.addEventListener("click", () => { const radio = dot.previousElementSibling; radio.checked = true; radio.dispatchEvent(new Event("change")); }));
+      courseForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const fd = new FormData(courseForm);
+        const id = fd.get("id");
+        const payload = {code: fd.get("code").trim(), name: fd.get("name").trim(), color: fd.get("color") || COURSE_COLORS[0]};
+        if(id){ Object.assign(data.courses.find(c => c.id === id), payload); editingCourseId = null; }
+        else { data.courses.push(Object.assign({id: uid(), lecturers:[], outlineText:"", outlineLink:""}, payload)); }
+        await saveData(); render();
+      });
+    }
+    const cancelCourseEdit = document.getElementById("cancelCourseEdit");
+    if(cancelCourseEdit) cancelCourseEdit.addEventListener("click", () => { editingCourseId = null; render(); });
+    document.querySelectorAll("[data-edit-course]").forEach(btn => btn.addEventListener("click", () => { editingCourseId = btn.getAttribute("data-edit-course"); render(); window.scrollTo({top:0, behavior:"smooth"}); }));
+    document.querySelectorAll("[data-delete-course]").forEach(btn => btn.addEventListener("click", async () => {
+      const cid = btn.getAttribute("data-delete-course");
+      if(!confirm("Delete this course? Its lectures and materials will remain but become unassigned.")) return;
+      data.courses = data.courses.filter(c => c.id !== cid);
+      data.lectures.forEach(l => { if(l.courseId === cid) l.courseId = null; });
+      data.materials.forEach(m => { if(m.courseId === cid) m.courseId = null; });
+      data.assignments = data.assignments.filter(a => a.courseId !== cid);
+      await saveData(); render();
+    }));
+    document.querySelectorAll("[data-open-course]").forEach(btn => btn.addEventListener("click", () => { drawerCourseId = btn.getAttribute("data-open-course"); render(); }));
+
+    // Course drawer
+    const closeCourseDrawer = document.getElementById("closeCourseDrawer");
+    if(closeCourseDrawer) closeCourseDrawer.addEventListener("click", () => { drawerCourseId = null; render(); });
+    const courseDrawerOverlay = document.getElementById("courseDrawerOverlay");
+    if(courseDrawerOverlay) courseDrawerOverlay.addEventListener("click", (e) => { if(e.target === courseDrawerOverlay){ drawerCourseId = null; render(); } });
+
+    const lecturerForm = document.getElementById("lecturerForm");
+    if(lecturerForm){
+      lecturerForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const fd = new FormData(lecturerForm);
+        const course = courseOf(drawerCourseId);
+        if(!course) return;
+        if(!course.lecturers) course.lecturers = [];
+        course.lecturers.push({id: uid(), name: fd.get("name").trim(), email: fd.get("email").trim()});
+        await saveData(); render();
+      });
+    }
+    document.querySelectorAll("[data-remove-lecturer]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const course = courseOf(drawerCourseId);
+        if(!course) return;
+        course.lecturers = (course.lecturers||[]).filter(l => l.id !== btn.getAttribute("data-remove-lecturer"));
+        await saveData(); render();
+      });
+    });
+
+    const outlineForm = document.getElementById("outlineForm");
+    if(outlineForm){
+      const fileInput = document.getElementById("outlineFileInput");
+      if(fileInput){
+        fileInput.addEventListener("change", () => {
+          const file = fileInput.files[0];
+          if(!file) return;
+          const reader = new FileReader();
+          reader.onload = () => { outlineForm.querySelector('[name="outlineText"]').value = reader.result; };
+          reader.readAsText(file);
+        });
+      }
+      outlineForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const fd = new FormData(outlineForm);
+        const course = courseOf(drawerCourseId);
+        if(!course) return;
+        course.outlineText = fd.get("outlineText").trim();
+        course.outlineLink = fd.get("outlineLink").trim();
+        await saveData(); render();
+      });
+    }
+
+    // Roster
+    const studentForm = document.getElementById("studentForm");
+    if(studentForm){
+      studentForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const fd = new FormData(studentForm);
+        data.students.push({id: uid(), roll: fd.get("roll").trim(), name: fd.get("name").trim(), email: fd.get("email").trim()});
+        await saveData(); render();
+      });
+    }
+    const importForm = document.getElementById("importForm");
+    if(importForm){
+      const csvFileInput = document.getElementById("csvFileInput");
+      if(csvFileInput){
+        csvFileInput.addEventListener("change", () => {
+          const file = csvFileInput.files[0];
+          if(!file) return;
+          const reader = new FileReader();
+          reader.onload = () => { importForm.querySelector('[name="csvText"]').value = reader.result; };
+          reader.readAsText(file);
+        });
+      }
+      importForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const fd = new FormData(importForm);
+        const text = fd.get("csvText").trim();
+        if(!text){ importSummary = "Nothing to import."; render(); return; }
+        const rows = parseCsvText(text);
+        let added = 0, updated = 0;
+        rows.forEach(cols => {
+          if(!cols.length) return;
+          if(cols[0] && cols[0].toLowerCase() === "roll") return; // skip header
+          const roll = (cols[0]||"").trim();
+          const name = (cols[1]||"").trim();
+          const email = (cols[2]||"").trim();
+          if(!roll || !name) return;
+          const existing = data.students.find(s => s.roll === roll);
+          if(existing){ existing.name = name; existing.email = email || existing.email; updated++; }
+          else { data.students.push({id: uid(), roll, name, email}); added++; }
+        });
+        importSummary = added + " added, " + updated + " updated.";
+        await saveData(); render();
+      });
+    }
+    document.querySelectorAll("[data-delete-student]").forEach(btn => btn.addEventListener("click", async (e) => { e.stopPropagation(); data.students = data.students.filter(s => s.id !== btn.getAttribute("data-delete-student")); await saveData(); render(); }));
+    const exportRosterCsvBtn = document.getElementById("exportRosterCsv");
+    if(exportRosterCsvBtn) exportRosterCsvBtn.addEventListener("click", () => {
+      const rows = [["Roll","Name","Email","Sessions Present","Total Sessions","Attendance %"]].concat(data.students.map(s => { const st = studentStats(s.id); return [s.roll, s.name, s.email||"", st.present, st.total, st.pct===null?"":st.pct]; }));
+      downloadCsv("roster_attendance_summary.csv", rows);
+    });
+    const exportRosterPdfBtn = document.getElementById("exportRosterPdf");
+    if(exportRosterPdfBtn) exportRosterPdfBtn.addEventListener("click", exportRosterPdf);
+
+    document.querySelectorAll("[data-open-student]").forEach(tr => tr.addEventListener("click", () => { drawerStudentId = tr.getAttribute("data-open-student"); render(); }));
+    const closeStudentDrawer = document.getElementById("closeStudentDrawer");
+    if(closeStudentDrawer) closeStudentDrawer.addEventListener("click", () => { drawerStudentId = null; render(); });
+    const studentDrawerOverlay = document.getElementById("studentDrawerOverlay");
+    if(studentDrawerOverlay) studentDrawerOverlay.addEventListener("click", (e) => { if(e.target === studentDrawerOverlay){ drawerStudentId = null; render(); } });
+
+    // Governor login
+    const closeLoginDrawer = document.getElementById("closeLoginDrawer");
+    if(closeLoginDrawer) closeLoginDrawer.addEventListener("click", () => { loginOpen = false; render(); });
+    const loginDrawerOverlay = document.getElementById("loginDrawerOverlay");
+    if(loginDrawerOverlay) loginDrawerOverlay.addEventListener("click", (e) => { if(e.target === loginDrawerOverlay){ loginOpen = false; render(); } });
+    const loginForm = document.getElementById("loginForm");
+    if(loginForm){
+      loginForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const fd = new FormData(loginForm);
+        const submitBtn = loginForm.querySelector('button[type="submit"]');
+        submitBtn.disabled = true; submitBtn.textContent = "Signing in…";
+        const result = await governorLogin(fd.get("password"));
+        if(result.ok){
+          loginOpen = false; loginError = ""; role = "governor"; myIdentityId = null;
+          await loadData(); render();
+        } else {
+          loginError = result.error; render();
+        }
+      });
+    }
+  }
+
+  document.getElementById("sideNav").addEventListener("click", (e) => { const btn = e.target.closest(".navbtn"); if(!btn) return; activeTab = btn.dataset.tab; render(); });
+  document.getElementById("roleSeg").addEventListener("click", (e) => {
+    const btn = e.target.closest("button"); if(!btn) return;
+    if(btn.dataset.role === "governor" && !authToken){ loginOpen = true; loginError = ""; render(); return; }
+    role = btn.dataset.role;
+    if(role === "governor"){ myIdentityId = null; if(activeTab === "mine") activeTab = "dashboard"; }
+    render();
+  });
+  document.getElementById("identitySelect").addEventListener("change", (e) => { myIdentityId = e.target.value || null; render(); });
+  document.getElementById("signOutBtn").addEventListener("click", governorLogout);
+
+  const classNameInput = document.getElementById("classNameInput");
+  let nameSaveTimer;
+  classNameInput.addEventListener("input", () => { data.className = classNameInput.value; clearTimeout(nameSaveTimer); nameSaveTimer = setTimeout(saveData, 500); });
+
+  window.addEventListener("hashchange", render);
+
+  (async function init(){
+    await loadData();
+    render();
+  })();
+})();
+</script>
+</body>
+</html>
