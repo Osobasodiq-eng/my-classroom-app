@@ -249,6 +249,8 @@
   let editingLectureId = null;
   let editingMaterialId = null;
   let editingCourseId = null;
+  let pendingLecturers = [];
+  let pendingLecturersFor = "__new__";
   let editingAssignmentId = null;
   let importSummary = "";
   let tickTimer = null;
@@ -776,6 +778,15 @@
 
   function renderCourses(){
     const editingCourse = editingCourseId ? data.courses.find(c => c.id === editingCourseId) : null;
+    const targetKey = editingCourse ? editingCourse.id : "__new__";
+    if(pendingLecturersFor !== targetKey){
+      pendingLecturers = editingCourse ? (editingCourse.lecturers||[]).map(l => ({id:l.id, name:l.name, email:l.email})) : [];
+      pendingLecturersFor = targetKey;
+    }
+    const lecturerChips = pendingLecturers.length === 0
+      ? '<span class="hint">No lecturers added yet — add at least one below.</span>'
+      : pendingLecturers.map((l, i) => '<span class="lecturer-chip">' + escapeHtml(l.name) + (l.email ? ' · ' + escapeHtml(l.email) : '') + '<button type="button" data-remove-pending-lecturer="' + i + '" title="Remove">×</button></span>').join("");
+
     const addForm = role === "governor" ? (
       '<div class="panel" style="margin-bottom:18px;"><h2>' + (editingCourse ? "Edit course" : "Add a course") + '</h2>' +
       '<form id="courseForm"><input type="hidden" name="id" value="' + (editingCourse ? editingCourse.id : "") + '" />' +
@@ -786,7 +797,21 @@
       '<div class="form-row"><div class="field"><label>Color tag</label><div style="display:flex; gap:8px; padding-top:4px;">' +
         COURSE_COLORS.map(col => '<label style="cursor:pointer;"><input type="radio" name="color" value="' + col + '" ' + (((editingCourse && editingCourse.color===col) || (!editingCourse && col===COURSE_COLORS[0])) ? "checked" : "") + ' style="display:none;" class="colorRadio" /><span class="course-dot" data-swatch="' + col + '" style="background:' + col + '; width:22px; height:22px; outline:2px solid transparent;"></span></label>').join("") +
       '</div></div></div>' +
-      '<div class="form-row" style="gap:8px;"><button class="btn" type="submit">' + (editingCourse ? "Save changes" : "Add course") + '</button>' + (editingCourse ? '<button class="btn ghost" type="button" id="cancelCourseEdit">Cancel</button>' : '') + '</div>' +
+
+      '<p class="hint" style="margin:16px 0 6px; text-transform:uppercase; letter-spacing:.07em; font-size:11px;">Lecturers teaching this course</p>' +
+      '<div style="margin-bottom:10px;">' + lecturerChips + '</div>' +
+      '<div class="form-row" style="align-items:flex-end;">' +
+        '<div class="field"><label>Lecturer name</label><input type="text" id="courseLecturerName" placeholder="Prof. Name" /></div>' +
+        '<div class="field"><label>Email (optional)</label><input type="email" id="courseLecturerEmail" placeholder="optional" /></div>' +
+        '<div style="align-self:flex-end; padding-bottom:2px;"><button class="btn small ghost" type="button" id="addPendingLecturerBtn">+ Add lecturer</button></div>' +
+      '</div>' +
+
+      '<p class="hint" style="margin:16px 0 6px; text-transform:uppercase; letter-spacing:.07em; font-size:11px;">Course outline</p>' +
+      '<div class="form-row"><div class="field"><label>Upload a text/markdown file (optional)</label><input type="file" name="outlineFile" accept=".txt,.md,text/plain,text/markdown" id="courseOutlineFileInput" /></div></div>' +
+      '<div class="form-row"><div class="field"><label>Outline text</label><textarea name="outlineText" rows="6" placeholder="Paste or type the syllabus / weekly outline here">' + (editingCourse?escapeHtml(editingCourse.outlineText||""):"") + '</textarea></div></div>' +
+      '<div class="form-row"><div class="field"><label>Or a link to a hosted document (PDF, Drive, etc.)</label><input type="url" name="outlineLink" value="' + (editingCourse?escapeAttr(editingCourse.outlineLink||""):"") + '" placeholder="https://..." /></div></div>' +
+
+      '<div class="form-row" style="gap:8px; margin-top:6px;"><button class="btn" type="submit">' + (editingCourse ? "Save changes" : "Add course") + '</button>' + (editingCourse ? '<button class="btn ghost" type="button" id="cancelCourseEdit">Cancel</button>' : '') + '</div>' +
       '</form></div>'
     ) : "";
 
@@ -1331,19 +1356,57 @@
         r.addEventListener("change", () => { courseForm.querySelectorAll(".course-dot").forEach(d => d.style.outline = "2px solid transparent"); if(r.checked) dot.style.outline = "2px solid var(--chalk)"; });
       });
       courseForm.querySelectorAll(".course-dot").forEach(dot => dot.addEventListener("click", () => { const radio = dot.previousElementSibling; radio.checked = true; radio.dispatchEvent(new Event("change")); }));
+
+      const addPendingLecturerBtn = document.getElementById("addPendingLecturerBtn");
+      if(addPendingLecturerBtn){
+        addPendingLecturerBtn.addEventListener("click", () => {
+          const nameInput = document.getElementById("courseLecturerName");
+          const emailInput = document.getElementById("courseLecturerEmail");
+          const name = nameInput.value.trim();
+          if(!name) { nameInput.focus(); return; }
+          pendingLecturers.push({id: uid(), name, email: emailInput.value.trim()});
+          render();
+        });
+      }
+      document.querySelectorAll("[data-remove-pending-lecturer]").forEach(btn => {
+        btn.addEventListener("click", () => {
+          pendingLecturers.splice(parseInt(btn.getAttribute("data-remove-pending-lecturer"), 10), 1);
+          render();
+        });
+      });
+
+      const courseOutlineFileInput = document.getElementById("courseOutlineFileInput");
+      if(courseOutlineFileInput){
+        courseOutlineFileInput.addEventListener("change", () => {
+          const file = courseOutlineFileInput.files[0];
+          if(!file) return;
+          const reader = new FileReader();
+          reader.onload = () => { courseForm.querySelector('[name="outlineText"]').value = reader.result; };
+          reader.readAsText(file);
+        });
+      }
+
       courseForm.addEventListener("submit", async (e) => {
         e.preventDefault();
         const fd = new FormData(courseForm);
         const id = fd.get("id");
-        const payload = {code: fd.get("code").trim(), name: fd.get("name").trim(), color: fd.get("color") || COURSE_COLORS[0]};
+        const payload = {
+          code: fd.get("code").trim(),
+          name: fd.get("name").trim(),
+          color: fd.get("color") || COURSE_COLORS[0],
+          lecturers: pendingLecturers.map(l => ({id: l.id, name: l.name, email: l.email})),
+          outlineText: fd.get("outlineText").trim(),
+          outlineLink: fd.get("outlineLink").trim(),
+        };
         if(id){ Object.assign(data.courses.find(c => c.id === id), payload); editingCourseId = null; }
-        else { data.courses.push(Object.assign({id: uid(), lecturers:[], outlineText:"", outlineLink:""}, payload)); }
+        else { data.courses.push(Object.assign({id: uid()}, payload)); }
+        pendingLecturers = []; pendingLecturersFor = "__new__";
         await saveData(); render();
       });
     }
     const cancelCourseEdit = document.getElementById("cancelCourseEdit");
-    if(cancelCourseEdit) cancelCourseEdit.addEventListener("click", () => { editingCourseId = null; render(); });
-    document.querySelectorAll("[data-edit-course]").forEach(btn => btn.addEventListener("click", () => { editingCourseId = btn.getAttribute("data-edit-course"); render(); window.scrollTo({top:0, behavior:"smooth"}); }));
+    if(cancelCourseEdit) cancelCourseEdit.addEventListener("click", () => { editingCourseId = null; pendingLecturers = []; pendingLecturersFor = "__new__"; render(); });
+    document.querySelectorAll("[data-edit-course]").forEach(btn => btn.addEventListener("click", () => { editingCourseId = btn.getAttribute("data-edit-course"); pendingLecturersFor = null; render(); window.scrollTo({top:0, behavior:"smooth"}); }));
     document.querySelectorAll("[data-delete-course]").forEach(btn => btn.addEventListener("click", async () => {
       const cid = btn.getAttribute("data-delete-course");
       if(!confirm("Delete this course? Its lectures and materials will remain but become unassigned.")) return;
