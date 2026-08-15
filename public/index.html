@@ -1119,7 +1119,8 @@
     document.body.classList.toggle("kiosk", !!code);
 
     if(code){
-      document.getElementById("mainArea").innerHTML = "";
+      const mainArea = document.getElementById("mainArea");
+      if(mainArea) mainArea.innerHTML = "";
       let host = document.getElementById("kioskHost");
       if(!host){ host = document.createElement("div"); host.id = "kioskHost"; document.getElementById("appRoot").innerHTML = ""; document.getElementById("appRoot").appendChild(host); }
       host.innerHTML = renderKiosk(code);
