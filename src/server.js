@@ -3,7 +3,7 @@ const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const db = require('./db');
-const { login, requireGovernor } = require('./auth');
+const { login, requireGovernor, studentSignup, studentLogin, requireStudent } = require('./auth');
 
 const REQUIRED_ENV = ['DATABASE_URL', 'JWT_SECRET', 'GOVERNOR_PASSWORD'];
 const missing = REQUIRED_ENV.filter((k) => !process.env[k]);
@@ -22,6 +22,8 @@ app.use(express.json({ limit: '2mb' }));
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
 app.post('/api/auth/login', login);
+app.post('/api/auth/student-signup', studentSignup);
+app.post('/api/auth/student-login', studentLogin);
 
 // Public: anyone with the site URL can read the register — this mirrors a
 // physical noticeboard, and students need it to populate the check-in
@@ -57,14 +59,12 @@ app.put('/api/state', requireGovernor, async (req, res) => {
   }
 });
 
-// Public, code-scoped: a student on the check-in link signs their own
-// attendance. The server re-validates the session window itself rather
-// than trusting anything the client sends, so this endpoint can stay
-// open with no login.
-app.post('/api/checkin/:code/signin', async (req, res) => {
+// Requires a signed-in student now (not just anyone with the link) — the
+// server uses the identity from their token, not anything the client sends,
+// so a student can only ever mark themselves present, never a classmate.
+app.post('/api/checkin/:code/signin', requireStudent, async (req, res) => {
   const { code } = req.params;
-  const { studentId } = req.body || {};
-  if (!studentId) return res.status(400).json({ error: 'studentId is required.' });
+  const studentId = req.auth.studentId;
   try {
     const result = await db.signInAttendance(code, studentId);
     if (!result.ok) return res.status(result.status).json({ error: result.error });

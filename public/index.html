@@ -180,8 +180,7 @@
     </div>
     <div class="top-right">
       <div class="role-switch" id="identityWrap" style="display:none;">
-        <span class="label">I am</span>
-        <select class="identity" id="identitySelect"></select>
+        <span class="label" id="identityLabel">Signed in as</span>
       </div>
       <div class="role-switch">
         <span class="label">Viewing as</span>
@@ -255,6 +254,9 @@
   let tickTimer = null;
   let loginOpen = false;
   let loginError = "";
+  let studentAuthOpen = false;
+  let studentAuthMode = "signin"; // or "signup"
+  let studentAuthError = "";
 
   // ---------- AUTH ----------
   let authToken = localStorage.getItem("governorToken") || null;
@@ -265,6 +267,24 @@
     authToken = token;
     if(token) localStorage.setItem("governorToken", token);
     else localStorage.removeItem("governorToken");
+  }
+
+  // Student account (separate from the Governor token above).
+  let studentToken = localStorage.getItem("studentToken") || null;
+  let studentInfo = null;
+  try{ studentInfo = JSON.parse(localStorage.getItem("studentInfo") || "null"); }catch(e){ studentInfo = null; }
+  if(studentToken && studentInfo && !authToken){ role = "student"; myIdentityId = studentInfo.id; }
+
+  function setStudentSession(token, info){
+    studentToken = token; studentInfo = info;
+    if(token){ localStorage.setItem("studentToken", token); localStorage.setItem("studentInfo", JSON.stringify(info)); }
+    else{ localStorage.removeItem("studentToken"); localStorage.removeItem("studentInfo"); }
+  }
+  function studentLogout(){
+    setStudentSession(null, null);
+    myIdentityId = null;
+    role = "student";
+    render();
   }
 
   const defaultData = () => ({
@@ -900,6 +920,47 @@
       '</div>';
   }
 
+  // ---------- STUDENT SIGN-IN / SIGN-UP ----------
+
+  function renderStudentAuthModal(){
+    if(!studentAuthOpen) return "";
+    const isSignup = studentAuthMode === "signup";
+    return '<div class="drawer-overlay" id="studentAuthOverlay"><div class="drawer" style="width:min(360px,92vw);">' +
+      '<button class="close" id="closeStudentAuthDrawer">×</button>' +
+      '<h2>' + (isSignup ? "Create your account" : "Student sign-in") + '</h2>' +
+      '<p class="hint" style="margin-bottom:16px;">' + (isSignup
+        ? "Sign up with your matric number and a password you'll remember. This registers you on the Governor's roster automatically."
+        : "Sign in with your matric number and password to see your attendance and check in to class.") + '</p>' +
+      '<form id="studentAuthForm">' +
+        '<div class="field"><label>Matric number</label><input required type="text" name="matric" autofocus autocapitalize="characters" /></div>' +
+        (isSignup ? '<div class="field"><label>Full name</label><input required type="text" name="name" /></div>' : '') +
+        '<div class="field"><label>Password</label><input required type="password" name="password" minlength="4" /></div>' +
+        (studentAuthError ? '<p class="hint" style="color:var(--rose); margin-bottom:10px;">' + escapeHtml(studentAuthError) + '</p>' : '') +
+        '<button class="btn" type="submit" style="width:100%;">' + (isSignup ? "Sign up" : "Sign in") + '</button>' +
+      '</form>' +
+      '<p class="hint" style="margin-top:14px; text-align:center;">' + (isSignup
+        ? 'Already registered? <a href="#" id="studentAuthSwitch">Sign in instead</a>'
+        : 'New here? <a href="#" id="studentAuthSwitch">Create an account</a>') + '</p>' +
+      '</div></div>';
+  }
+
+  async function submitStudentAuth(fd){
+    const matric = fd.get("matric");
+    const password = fd.get("password");
+    const isSignup = studentAuthMode === "signup";
+    const url = isSignup ? "/api/auth/student-signup" : "/api/auth/student-login";
+    const body = isSignup ? { matric, name: fd.get("name"), password } : { matric, password };
+    try{
+      const res = await fetch(url, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
+      const json = await res.json();
+      if(!res.ok) return { ok:false, error: json.error || "Something went wrong." };
+      setStudentSession(json.token, json.student);
+      return { ok:true };
+    }catch(err){
+      return { ok:false, error:"Could not reach the server — check your connection." };
+    }
+  }
+
   // ---------- GOVERNOR LOGIN ----------
 
   function renderLoginModal(){
@@ -944,29 +1005,46 @@
     const mm = Math.floor(remainMs/60000), ss = Math.floor((remainMs%60000)/1000);
     const countdown = "Closes in " + String(mm).padStart(2,"0") + ":" + String(ss).padStart(2,"0");
 
-    if(myIdentityId){
-      const rec = getRecord(session.lectureId, myIdentityId);
-      if(rec.status === "present" && rec.method === "self"){
-        const s = data.students.find(x => x.id === myIdentityId);
-        return '<div class="kiosk-card"><span class="mark">Roll Call</span>' +
-          '<div class="kiosk-success">You\'re marked present ✓</div>' +
-          '<p class="sub">' + escapeHtml(s ? s.name : "") + ' · signed at ' + fmtTime(rec.at) + '</p>' +
-          '<p class="sub" style="margin-top:10px;">' + escapeHtml(lec ? lec.title : "") + '</p>' +
-          '<a class="kiosk-back" href="#" id="kioskBack">Open full app</a></div>';
-      }
+    // Not signed in — students need an account before they can check in,
+    // so this is the same sign-in/sign-up form as the main app, just
+    // rendered inline since kiosk mode replaces the whole page.
+    if(!studentToken){
+      const isSignup = studentAuthMode === "signup";
+      return '<div class="kiosk-card"><span class="mark">Roll Call</span>' +
+        '<h1>' + escapeHtml(lec ? lec.title : "Session") + '</h1>' +
+        '<p class="sub">' + escapeHtml(course ? course.name : "") + '</p>' +
+        '<div class="countdown">' + countdown + '</div>' +
+        '<p class="sub" style="margin-bottom:10px;">' + (isSignup ? "Create an account to check in:" : "Sign in to check in:") + '</p>' +
+        '<form id="kioskAuthForm">' +
+          '<input required type="text" name="matric" placeholder="Matric number" autocapitalize="characters" style="margin-bottom:10px;" />' +
+          (isSignup ? '<input required type="text" name="name" placeholder="Full name" style="margin-bottom:10px;" />' : '') +
+          '<input required type="password" name="password" placeholder="Password" minlength="4" style="margin-bottom:10px;" />' +
+          (studentAuthError ? '<p class="sub" style="color:var(--rose); margin-bottom:10px;">' + escapeHtml(studentAuthError) + '</p>' : '') +
+          '<button class="btn" type="submit">' + (isSignup ? "Sign up & check in" : "Sign in & check in") + '</button>' +
+        '</form>' +
+        '<a class="kiosk-back" href="#" id="kioskAuthSwitch">' + (isSignup ? "Already registered? Sign in instead" : "New here? Create an account") + '</a>' +
+        '<br><a class="kiosk-back" href="#" id="kioskBack">Open full app</a></div>';
     }
 
-    const studentOptions = '<option value="">Select your name…</option>' + data.students.map(s => '<option value="' + s.id + '" ' + (s.id===myIdentityId?'selected':'') + '>' + escapeHtml(s.name) + ' (Roll ' + s.roll + ')</option>').join("");
+    const rec = getRecord(session.lectureId, studentInfo.id);
+    if(rec.status === "present" && rec.method === "self"){
+      return '<div class="kiosk-card"><span class="mark">Roll Call</span>' +
+        '<div class="kiosk-success">You\'re marked present ✓</div>' +
+        '<p class="sub">' + escapeHtml(studentInfo.name) + ' · signed at ' + fmtTime(rec.at) + '</p>' +
+        '<p class="sub" style="margin-top:10px;">' + escapeHtml(lec ? lec.title : "") + '</p>' +
+        '<a class="kiosk-back" href="#" id="kioskBack">Open full app</a></div>';
+    }
 
     return '<div class="kiosk-card"><span class="mark">Roll Call</span>' +
       '<h1>' + escapeHtml(lec ? lec.title : "Session") + '</h1>' +
       '<p class="sub">' + escapeHtml(course ? course.name : "") + (lec && lec.topic ? " · " + escapeHtml(lec.topic) : "") + '</p>' +
       '<div class="countdown">' + countdown + '</div>' +
+      '<p class="sub" style="margin-bottom:14px;">Signing in as <strong>' + escapeHtml(studentInfo.name) + '</strong> (' + escapeHtml(studentInfo.roll) + ')</p>' +
       '<form id="kioskForm">' +
-        '<select name="studentId" required>' + studentOptions + '</select>' +
-        '<button class="btn" type="submit">Sign attendance</button>' +
+        '<button class="btn" type="submit">Confirm attendance</button>' +
       '</form>' +
-      '<a class="kiosk-back" href="#" id="kioskBack">Open full app</a></div>';
+      '<a class="kiosk-back" href="#" id="kioskSwitchAccount">Not you? Sign out</a>' +
+      '<br><a class="kiosk-back" href="#" id="kioskBack">Open full app</a></div>';
   }
 
   // ---------- MAIN RENDER ----------
@@ -1004,9 +1082,10 @@
       }
     } else if(myTabBtn){ myTabBtn.remove(); if(activeTab === "mine") activeTab = "dashboard"; }
 
-    document.getElementById("identityWrap").style.display = role === "student" ? "flex" : "none";
-    const identitySelect = document.getElementById("identitySelect");
-    identitySelect.innerHTML = '<option value="">Select your name…</option>' + data.students.map(s => '<option value="' + s.id + '" ' + (s.id===myIdentityId?'selected':'') + '>' + escapeHtml(s.name) + ' (Roll ' + s.roll + ')</option>').join("");
+    document.getElementById("identityWrap").style.display = (role === "student" && studentInfo) ? "flex" : "none";
+    if(role === "student" && studentInfo){
+      document.getElementById("identityLabel").textContent = "Signed in as " + studentInfo.name + " (" + studentInfo.roll + ")";
+    }
 
     document.querySelectorAll("#sideNav .navbtn").forEach(b => b.classList.toggle("active", b.dataset.tab === activeTab));
     document.querySelectorAll("#roleSeg button").forEach(b => b.classList.toggle("active", b.dataset.role === role));
@@ -1023,41 +1102,60 @@
 
     let drawerHost = document.getElementById("drawerHost");
     if(!drawerHost){ drawerHost = document.createElement("div"); drawerHost.id = "drawerHost"; document.body.appendChild(drawerHost); }
-    drawerHost.innerHTML = renderStudentDrawer() + renderCourseDrawer() + renderLoginModal();
+    drawerHost.innerHTML = renderStudentDrawer() + renderCourseDrawer() + renderLoginModal() + renderStudentAuthModal();
 
     const signOutBtn = document.getElementById("signOutBtn");
-    if(signOutBtn) signOutBtn.style.display = (role === "governor" && authToken) ? "inline" : "none";
+    if(role === "governor" && authToken){ signOutBtn.style.display = "inline"; signOutBtn.textContent = "Sign out"; }
+    else if(role === "student" && studentToken){ signOutBtn.style.display = "inline"; signOutBtn.textContent = "Sign out"; }
+    else signOutBtn.style.display = "none";
 
     attachEvents();
   }
 
   function attachKioskEvents(code){
     const back = document.getElementById("kioskBack");
-    if(back) back.addEventListener("click", (e) => { e.preventDefault(); location.hash = ""; myIdentityId = null; render(); });
+    if(back) back.addEventListener("click", (e) => { e.preventDefault(); location.hash = ""; render(); });
+
+    const switchAccount = document.getElementById("kioskSwitchAccount");
+    if(switchAccount) switchAccount.addEventListener("click", (e) => { e.preventDefault(); studentLogout(); });
+
+    const authSwitch = document.getElementById("kioskAuthSwitch");
+    if(authSwitch) authSwitch.addEventListener("click", (e) => { e.preventDefault(); studentAuthMode = studentAuthMode === "signup" ? "signin" : "signup"; studentAuthError = ""; render(); });
+
+    const authForm = document.getElementById("kioskAuthForm");
+    if(authForm){
+      authForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const fd = new FormData(authForm);
+        const submitBtn = authForm.querySelector('button[type="submit"]');
+        submitBtn.disabled = true; submitBtn.textContent = "Please wait…";
+        const result = await submitStudentAuth(fd);
+        if(result.ok){ studentAuthError = ""; myIdentityId = studentInfo.id; render(); }
+        else { studentAuthError = result.error; render(); }
+      });
+    }
+
     const form = document.getElementById("kioskForm");
     if(form){
       form.addEventListener("submit", async (e) => {
         e.preventDefault();
-        const fd = new FormData(form);
-        const sid = fd.get("studentId");
-        if(!sid) return;
         const submitBtn = form.querySelector('button[type="submit"]');
         submitBtn.disabled = true; submitBtn.textContent = "Signing in…";
         try{
           const res = await fetch("/api/checkin/" + encodeURIComponent(code) + "/signin", {
             method: "POST",
-            headers: {"Content-Type":"application/json"},
-            body: JSON.stringify({studentId: sid}),
+            headers: {"Content-Type":"application/json", "Authorization":"Bearer " + studentToken},
+            body: JSON.stringify({}),
           });
           const json = await res.json();
-          if(!res.ok){ alert(json.error || "Could not sign in."); submitBtn.disabled = false; submitBtn.textContent = "Sign attendance"; return; }
-          myIdentityId = sid;
+          if(res.status === 401){ studentLogout(); return; }
+          if(!res.ok){ alert(json.error || "Could not sign in."); submitBtn.disabled = false; submitBtn.textContent = "Confirm attendance"; return; }
           if(!data.attendance[json.lectureId]) data.attendance[json.lectureId] = {};
-          data.attendance[json.lectureId][sid] = json.record;
+          data.attendance[json.lectureId][json.studentId] = json.record;
           if(typeof json.version === "number") stateVersion = json.version;
         }catch(err){
           alert("Could not reach the server — check your connection and try again.");
-          submitBtn.disabled = false; submitBtn.textContent = "Sign attendance";
+          submitBtn.disabled = false; submitBtn.textContent = "Confirm attendance";
           return;
         }
         render();
@@ -1381,18 +1479,50 @@
         }
       });
     }
+
+    // Student auth (sign in / sign up)
+    const closeStudentAuthDrawer = document.getElementById("closeStudentAuthDrawer");
+    if(closeStudentAuthDrawer) closeStudentAuthDrawer.addEventListener("click", () => { studentAuthOpen = false; render(); });
+    const studentAuthOverlay = document.getElementById("studentAuthOverlay");
+    if(studentAuthOverlay) studentAuthOverlay.addEventListener("click", (e) => { if(e.target === studentAuthOverlay){ studentAuthOpen = false; render(); } });
+    const studentAuthSwitch = document.getElementById("studentAuthSwitch");
+    if(studentAuthSwitch) studentAuthSwitch.addEventListener("click", (e) => { e.preventDefault(); studentAuthMode = studentAuthMode === "signup" ? "signin" : "signup"; studentAuthError = ""; render(); });
+    const studentAuthForm = document.getElementById("studentAuthForm");
+    if(studentAuthForm){
+      studentAuthForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const fd = new FormData(studentAuthForm);
+        const submitBtn = studentAuthForm.querySelector('button[type="submit"]');
+        submitBtn.disabled = true; submitBtn.textContent = "Please wait…";
+        const result = await submitStudentAuth(fd);
+        if(result.ok){
+          studentAuthOpen = false; studentAuthError = ""; role = "student"; myIdentityId = studentInfo.id;
+          await loadData(); render();
+        } else {
+          studentAuthError = result.error; render();
+        }
+      });
+    }
   }
 
   document.getElementById("sideNav").addEventListener("click", (e) => { const btn = e.target.closest(".navbtn"); if(!btn) return; activeTab = btn.dataset.tab; render(); });
   document.getElementById("roleSeg").addEventListener("click", (e) => {
     const btn = e.target.closest("button"); if(!btn) return;
-    if(btn.dataset.role === "governor" && !authToken){ loginOpen = true; loginError = ""; render(); return; }
-    role = btn.dataset.role;
-    if(role === "governor"){ myIdentityId = null; if(activeTab === "mine") activeTab = "dashboard"; }
+    if(btn.dataset.role === "governor"){
+      if(!authToken){ loginOpen = true; loginError = ""; render(); return; }
+      role = "governor"; myIdentityId = null; if(activeTab === "mine") activeTab = "dashboard";
+      render();
+      return;
+    }
+    // student
+    if(!studentToken){ studentAuthOpen = true; studentAuthMode = "signin"; studentAuthError = ""; render(); return; }
+    role = "student"; myIdentityId = studentInfo ? studentInfo.id : null;
     render();
   });
-  document.getElementById("identitySelect").addEventListener("change", (e) => { myIdentityId = e.target.value || null; render(); });
-  document.getElementById("signOutBtn").addEventListener("click", governorLogout);
+  document.getElementById("signOutBtn").addEventListener("click", () => {
+    if(role === "governor") governorLogout();
+    else studentLogout();
+  });
 
   const classNameInput = document.getElementById("classNameInput");
   let nameSaveTimer;

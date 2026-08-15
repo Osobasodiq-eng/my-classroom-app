@@ -1,4 +1,5 @@
 const { Pool } = require('pg');
+const crypto = require('crypto');
 
 // Render (and most managed Postgres hosts) require SSL, and their certs
 // aren't always in the default trust chain from a small web service —
@@ -29,6 +30,18 @@ async function init() {
       version INTEGER NOT NULL DEFAULT 1,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       CONSTRAINT single_row CHECK (id = 1)
+    );
+  `);
+  // Kept in its own table, deliberately never inside the app_state JSON blob:
+  // the Governor's saves overwrite that whole document, and if password
+  // hashes lived inside it, an ordinary Governor edit could silently wipe
+  // every student's password. This table is never touched by that save.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS student_credentials (
+      matric TEXT PRIMARY KEY,
+      student_id TEXT NOT NULL,
+      password_hash TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
   const { rows } = await pool.query('SELECT id FROM app_state WHERE id = 1');
@@ -135,4 +148,75 @@ async function signInAttendance(code, studentId) {
   }
 }
 
-module.exports = { pool, init, getState, setState, signInAttendance, DEFAULT_DATA };
+// Self-service signup. If the matric number already exists in the roster
+// (e.g. the Governor pre-loaded it), the student claims that same roster
+// row instead of creating a duplicate. If it doesn't exist yet, a new
+// roster entry is created — this is what makes signup "auto-register" the
+// student, as requested.
+async function studentSignup(matricRaw, name, passwordHash) {
+  const matric = matricRaw.trim().toUpperCase();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const existingCred = await client.query('SELECT 1 FROM student_credentials WHERE matric = $1', [matric]);
+    if (existingCred.rows.length) {
+      await client.query('ROLLBACK');
+      return { ok: false, status: 409, error: 'That matric number is already registered — try signing in instead.' };
+    }
+    const { rows } = await client.query('SELECT data, version FROM app_state WHERE id = 1 FOR UPDATE');
+    const data = rows[0].data;
+    const version = rows[0].version;
+
+    let student = (data.students || []).find(
+      (s) => (s.roll || '').trim().toUpperCase() === matric
+    );
+    if (student) {
+      if (name) student.name = name;
+    } else {
+      student = {
+        id: 'stu-' + crypto.randomBytes(6).toString('hex'),
+        roll: matricRaw.trim(),
+        name: name || matricRaw.trim(),
+        email: '',
+      };
+      if (!data.students) data.students = [];
+      data.students.push(student);
+    }
+
+    await client.query(
+      'INSERT INTO student_credentials (matric, student_id, password_hash) VALUES ($1, $2, $3)',
+      [matric, student.id, passwordHash]
+    );
+    await client.query(
+      'UPDATE app_state SET data = $1, version = $2, updated_at = now() WHERE id = 1',
+      [data, version + 1]
+    );
+    await client.query('COMMIT');
+    return {
+      ok: true,
+      student: { id: student.id, name: student.name, roll: student.roll },
+      version: version + 1,
+    };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+async function studentCredential(matricRaw) {
+  const matric = matricRaw.trim().toUpperCase();
+  const { rows } = await pool.query(
+    'SELECT student_id, password_hash FROM student_credentials WHERE matric = $1',
+    [matric]
+  );
+  return rows[0] || null;
+}
+
+async function findStudentById(studentId) {
+  const { data } = await getState();
+  return (data.students || []).find((s) => s.id === studentId) || null;
+}
+
+module.exports = { pool, init, getState, setState, signInAttendance, studentSignup, studentCredential, findStudentById, DEFAULT_DATA };
