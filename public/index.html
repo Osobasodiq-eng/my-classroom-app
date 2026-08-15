@@ -275,7 +275,7 @@
   let studentToken = localStorage.getItem("studentToken") || null;
   let studentInfo = null;
   try{ studentInfo = JSON.parse(localStorage.getItem("studentInfo") || "null"); }catch(e){ studentInfo = null; }
-  if(studentToken && studentInfo && !authToken){ role = "student"; myIdentityId = studentInfo.id; activeTab = "mine"; }
+  if(studentToken && studentInfo && !authToken){ role = "student"; myIdentityId = studentInfo.id; }
 
   function setStudentSession(token, info){
     studentToken = token; studentInfo = info;
@@ -502,6 +502,32 @@
   // ---------- DASHBOARD ----------
 
   function renderDashboard(){
+    if(role === "student"){
+      const me = studentInfo ? data.students.find(s => s.id === studentInfo.id) : null;
+      const st = me ? studentStats(me.id) : {present:0, total:0, pct:null};
+      const pctLabel = st.pct === null ? "—" : st.pct + "%";
+      const upcomingAssignments = [...data.assignments].filter(a => !a.dueDate || a.dueDate >= new Date().toISOString().slice(0,10)).sort((a,b)=>(a.dueDate||"").localeCompare(b.dueDate||"")).slice(0,3);
+      const recentAnnouncements = [...data.announcements].sort((a,b)=> (b.pinned - a.pinned) || (b.date||"").localeCompare(a.date||"")).slice(0,2);
+      return (
+        '<div class="panel"><h2>' + escapeHtml(data.className) + '</h2>' +
+        '<p class="hint">' + (me ? 'Welcome back, ' + escapeHtml(me.name) + '.' : 'Welcome.') + '</p>' +
+        '<div class="stat-row">' +
+          '<div class="stat"><div class="num">' + pctLabel + '</div><div class="lbl">Your attendance</div></div>' +
+          '<div class="stat"><div class="num">' + st.present + '/' + st.total + '</div><div class="lbl">Sessions present</div></div>' +
+          '<div class="stat"><div class="num">' + data.courses.length + '</div><div class="lbl">Course' + (data.courses.length===1?'':'s') + ' this term</div></div>' +
+          '<div class="stat"><div class="num">' + data.materials.length + '</div><div class="lbl">Reading materials</div></div>' +
+        '</div>' +
+        '<p class="hint" style="margin:12px 0 0;">Open <strong>My Attendance</strong> in the sidebar for your full session-by-session record.</p>' +
+        '</div>' +
+        (upcomingAssignments.length ? '<div class="panel"><h2>Upcoming assignments</h2>' +
+          upcomingAssignments.map(a => '<div class="roster-row"><div class="who"><span class="name" style="font-size:14px;">' + escapeHtml(a.title) + '</span><span class="lecture-meta">' + escapeHtml(courseOf(a.courseId)?.name||'') + '</span></div><span class="lecture-meta">Due ' + fmtDate(a.dueDate) + '</span></div>').join("") +
+        '</div>' : '') +
+        (recentAnnouncements.length ? '<div class="panel"><h2>Latest from the board</h2>' +
+          recentAnnouncements.map(a => '<div class="announce-card"><h3>' + (a.pinned?'<span class="pin">Pinned</span>':'') + escapeHtml(a.title) + '</h3><div class="announce-meta">' + fmtDate(a.date) + '</div><div class="announce-body">' + escapeHtml(a.body) + '</div></div>').join("") +
+        '</div>' : '')
+      );
+    }
+
     const totalLectures = data.lectures.length;
     const totalStudents = data.students.length;
     const totalMaterials = data.materials.length;
@@ -1112,7 +1138,7 @@
       document.getElementById("identityLabel").textContent = "Signed in as " + studentInfo.name + " (" + studentInfo.roll + ")";
     }
 
-    const GOVERNOR_ONLY_TABS = ["dashboard", "attendance", "roster"];
+    const GOVERNOR_ONLY_TABS = ["attendance", "roster"];
     if(role === "student" && GOVERNOR_ONLY_TABS.includes(activeTab)) activeTab = "mine";
     GOVERNOR_ONLY_TABS.forEach(tab => {
       const btn = sideNav.querySelector('[data-tab="' + tab + '"]');
