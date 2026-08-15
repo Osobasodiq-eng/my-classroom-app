@@ -250,4 +250,12 @@ async function getFile(id) {
   return rows[0] || null;
 }
 
-module.exports = { pool, init, getState, setState, signInAttendance, studentSignup, studentCredential, findStudentById, saveFile, getFile, DEFAULT_DATA };
+async function resetStudentPassword(studentId, passwordHash) {
+  const result = await pool.query(
+    'UPDATE student_credentials SET password_hash = $1 WHERE student_id = $2',
+    [passwordHash, studentId]
+  );
+  return result.rowCount > 0;
+}
+
+module.exports = { pool, init, getState, setState, signInAttendance, studentSignup, studentCredential, findStudentById, resetStudentPassword, saveFile, getFile, DEFAULT_DATA };

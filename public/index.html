@@ -925,7 +925,7 @@
         '<td style="font-family:\'Fraunces\',serif; font-size:14.5px;">' + escapeHtml(s.name) + (risk ? '<span class="risk-badge">At risk</span>' : '') + '</td>' +
         '<td class="roll">' + escapeHtml(s.email||"—") + '</td>' +
         '<td class="roll">' + (st.pct===null ? "—" : st.pct+"%") + '</td>' +
-        (role === "governor" ? '<td><button class="btn small danger" data-delete-student="' + s.id + '">Remove</button></td>' : '') +
+        (role === "governor" ? '<td><div class="list-actions"><button class="btn small ghost" data-reset-password="' + s.id + '">Reset password</button><button class="btn small danger" data-delete-student="' + s.id + '">Remove</button></div></td>' : '') +
       '</tr>';
     }).join("");
 
@@ -1006,6 +1006,7 @@
       '<p class="hint" style="margin-top:14px; text-align:center;">' + (isSignup
         ? 'Already registered? <a href="#" id="studentAuthSwitch">Sign in instead</a>'
         : 'New here? <a href="#" id="studentAuthSwitch">Create an account</a>') + '</p>' +
+      (!isSignup ? '<p class="hint" style="margin-top:6px; text-align:center;">Forgot your password? Ask your Governor to reset it for you from the Roster tab.</p>' : '') +
       '</div></div>';
   }
 
@@ -1088,6 +1089,7 @@
           '<button class="btn" type="submit">' + (isSignup ? "Sign up & check in" : "Sign in & check in") + '</button>' +
         '</form>' +
         '<a class="kiosk-back" href="#" id="kioskAuthSwitch">' + (isSignup ? "Already registered? Sign in instead" : "New here? Create an account") + '</a>' +
+        (!isSignup ? '<p class="sub" style="margin-top:6px;">Forgot your password? Ask your Governor to reset it.</p>' : '') +
         '<br><a class="kiosk-back" href="#" id="kioskBack">Open full app</a></div>';
     }
 
@@ -1579,6 +1581,26 @@
       });
     }
     document.querySelectorAll("[data-delete-student]").forEach(btn => btn.addEventListener("click", async (e) => { e.stopPropagation(); data.students = data.students.filter(s => s.id !== btn.getAttribute("data-delete-student")); await saveData(); render(); }));
+    document.querySelectorAll("[data-reset-password]").forEach(btn => btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const studentId = btn.getAttribute("data-reset-password");
+      const student = data.students.find(s => s.id === studentId);
+      const newPassword = prompt("New password for " + (student ? student.name : "this student") + " (at least 4 characters):");
+      if(newPassword === null) return;
+      if(newPassword.length < 4){ alert("Password must be at least 4 characters."); return; }
+      try{
+        const res = await fetch("/api/students/" + encodeURIComponent(studentId) + "/reset-password", {
+          method: "POST",
+          headers: {"Content-Type":"application/json", "Authorization":"Bearer " + authToken},
+          body: JSON.stringify({newPassword}),
+        });
+        const json = await res.json();
+        if(!res.ok){ alert(json.error || "Could not reset the password."); return; }
+        alert("Password reset. Share the new password with " + (student ? student.name : "the student") + " — they can sign in with it right away.");
+      }catch(err){
+        alert("Could not reach the server — check your connection and try again.");
+      }
+    }));
     const exportRosterCsvBtn = document.getElementById("exportRosterCsv");
     if(exportRosterCsvBtn) exportRosterCsvBtn.addEventListener("click", () => {
       const rows = [["Roll","Name","Email","Sessions Present","Total Sessions","Attendance %"]].concat(data.students.map(s => { const st = studentStats(s.id); return [s.roll, s.name, s.email||"", st.present, st.total, st.pct===null?"":st.pct]; }));

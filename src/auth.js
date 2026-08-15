@@ -106,4 +106,26 @@ function requireStudent(req, res, next) {
   }
 }
 
-module.exports = { login, requireGovernor, studentSignup, studentLogin, requireStudent };
+// Governor-only: a student who forgot their password has no self-service
+// reset (that would need an email service, which is a separate piece of
+// infrastructure to set up). Instead, the person who already holds the
+// keys to the whole class — the Governor — can set a new password for
+// them directly, the same way a teacher hands out a reset in person.
+async function resetStudentPassword(req, res) {
+  const { studentId } = req.params;
+  const { newPassword } = req.body || {};
+  if (!newPassword || String(newPassword).length < 4) {
+    return res.status(400).json({ error: 'Choose a password of at least 4 characters.' });
+  }
+  try {
+    const passwordHash = await bcrypt.hash(String(newPassword), 10);
+    const ok = await db.resetStudentPassword(studentId, passwordHash);
+    if (!ok) return res.status(404).json({ error: "This student hasn't signed up for an account yet — there's nothing to reset." });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Could not reset the password — try again.' });
+  }
+}
+
+module.exports = { login, requireGovernor, studentSignup, studentLogin, requireStudent, resetStudentPassword };
