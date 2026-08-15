@@ -37,6 +37,7 @@ app.post('/api/students/:studentId/reset-password', requireGovernor, resetStuden
 // roster without an account. Only writes require the Governor token.
 app.get('/api/state', async (req, res) => {
   try {
+    await db.finalizeExpiredSessions();
     const { data, version } = await db.getState();
     res.json({ data, version });
   } catch (err) {

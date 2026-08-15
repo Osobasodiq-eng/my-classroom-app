@@ -258,4 +258,65 @@ async function resetStudentPassword(studentId, passwordHash) {
   return result.rowCount > 0;
 }
 
-module.exports = { pool, init, getState, setState, signInAttendance, studentSignup, studentCredential, findStudentById, resetStudentPassword, saveFile, getFile, DEFAULT_DATA };
+// Runs lazily on read, not on a schedule — there's no background job
+// runner here, so this is triggered by ordinary traffic instead. A cheap
+// unlocked check runs first so a normal request doesn't pay for a row
+// lock; only when something is actually past its window does it take the
+// lock and do the write. Each session is marked `finalized` once handled
+// so this is a one-time transition, not something that reprocesses every
+// request forever.
+async function finalizeExpiredSessions() {
+  const { rows } = await pool.query('SELECT data FROM app_state WHERE id = 1');
+  if (!rows.length) return;
+  const now = Date.now();
+  const needsWork = (rows[0].data.attendanceSessions || []).some(
+    (s) => !s.finalized && new Date(s.endsAt).getTime() <= now
+  );
+  if (!needsWork) return;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: locked } = await client.query('SELECT data, version FROM app_state WHERE id = 1 FOR UPDATE');
+    const data = locked[0].data;
+    const version = locked[0].version;
+    const nowInner = Date.now();
+    let changed = false;
+
+    for (const session of data.attendanceSessions || []) {
+      if (session.finalized) continue;
+      if (new Date(session.endsAt).getTime() > nowInner) continue;
+      if (!data.attendance[session.lectureId]) data.attendance[session.lectureId] = {};
+      for (const student of data.students || []) {
+        const existing = data.attendance[session.lectureId][student.id];
+        if (!existing || !existing.status || existing.status === 'unmarked') {
+          data.attendance[session.lectureId][student.id] = {
+            status: 'absent',
+            method: 'auto',
+            at: session.endsAt,
+          };
+          changed = true;
+        }
+      }
+      session.finalized = true;
+      changed = true;
+    }
+
+    if (changed) {
+      await client.query(
+        'UPDATE app_state SET data = $1, version = $2, updated_at = now() WHERE id = 1',
+        [data, version + 1]
+      );
+      await client.query('COMMIT');
+    } else {
+      await client.query('ROLLBACK');
+    }
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+module.exports = { pool, init, getState, setState, signInAttendance, studentSignup, studentCredential, findStudentById, resetStudentPassword, saveFile, getFile, finalizeExpiredSessions, DEFAULT_DATA };

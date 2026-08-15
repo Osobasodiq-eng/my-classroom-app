@@ -469,7 +469,7 @@
       return [s.roll, s.name, rec.status, rec.method || "—", rec.at ? fmtDateTime(rec.at) : "—"];
     });
     doc.autoTable({
-      startY: 38, head: [["Roll","Name","Status","Method","Signed at"]], body: rows,
+      startY: 38, head: [["Matric No.","Name","Status","Method","Signed at"]], body: rows,
       styles:{fontSize:9}, headStyles:{fillColor:[36,64,47]}
     });
     doc.save("attendance_" + (lec.title||"session").replace(/\s+/g,"_") + ".pdf");
@@ -482,7 +482,7 @@
     doc.setFont("helvetica","bold"); doc.setFontSize(15);
     doc.text((data.className || "Class") + " — Attendance Summary", 14, 18);
     const rows = data.students.map(s => { const st = studentStats(s.id); return [s.roll, s.name, s.email||"", st.present, st.total - st.present, st.pct===null?"—":st.pct+"%"]; });
-    doc.autoTable({ startY: 26, head: [["Roll","Name","Email","Present","Absent","Attendance %"]], body: rows, styles:{fontSize:9}, headStyles:{fillColor:[36,64,47]} });
+    doc.autoTable({ startY: 26, head: [["Matric No.","Name","Email","Present","Absent","Attendance %"]], body: rows, styles:{fontSize:9}, headStyles:{fillColor:[36,64,47]} });
     doc.save("roster_attendance_summary.pdf");
   }
 
@@ -561,7 +561,7 @@
         '<div class="stat"><div class="num">' + avgAttendance + '</div><div class="lbl">Avg. attendance</div></div>' +
       '</div>' +
       (data.students.length === 0 ? '<div class="empty">No students on the roster yet. Add your cohort under the Roster tab.</div>' :
-        '<table class="ledger"><thead><tr><th>Roll</th><th>Student</th><th>Present</th><th>Attendance</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+        '<table class="ledger"><thead><tr><th>Matric No.</th><th>Student</th><th>Present</th><th>Attendance</th></tr></thead><tbody>' + rows + '</tbody></table>' +
         '<p class="hint" style="margin:12px 0 0;">Click a student to see their full session-by-session record.</p>') +
       '</div>' +
       (atRisk.length ? '<div class="panel"><h2>At-risk students <span class="risk-badge" style="margin-left:0;">Below ' + RISK_THRESHOLD + '%</span></h2>' +
@@ -616,7 +616,7 @@
       const toggle = role === "governor"
         ? '<button class="chalk-toggle ' + rec.status + '" data-toggle-student="' + s.id + '" title="Click to change status">' + (rec.status==="present" ? checkIcon() : rec.status==="absent" ? crossIcon() : dotIcon()) + '</button>'
         : '<span class="status-tag ' + rec.status + '">' + rec.status + '</span>';
-      const methodLabel = rec.method === "self" ? ('self-signed · ' + fmtTime(rec.at)) : (rec.method === "manual" ? "manual" : "");
+      const methodLabel = rec.method === "self" ? ('self-signed · ' + fmtTime(rec.at)) : (rec.method === "auto" ? "auto-marked absent" : (rec.method === "manual" ? "manual" : ""));
       return '<div class="roster-row"><div class="who"><span class="roll">' + s.roll + '</span><span class="name">' + escapeHtml(s.name) + '</span>' + (methodLabel ? '<span class="method-tag">' + methodLabel + '</span>' : '') + '</div>' +
         (role === "governor" ? '<span class="status-tag ' + rec.status + '">' + rec.status + '</span>' : '') + toggle + '</div>';
     }).join("");
@@ -902,7 +902,7 @@
     const addForm = role === "governor" ? (
       '<div class="panel" style="margin-bottom:18px;"><h2>Add a student</h2>' +
       '<form id="studentForm"><div class="form-row">' +
-        '<div class="field" style="max-width:110px;"><label>Roll no.</label><input required name="roll" placeholder="04" /></div>' +
+        '<div class="field" style="max-width:150px;"><label>Matric number</label><input required name="roll" placeholder="e.g. CGU/20/1051" /></div>' +
         '<div class="field"><label>Name</label><input required name="name" placeholder="Full name" /></div>' +
         '<div class="field"><label>Email (optional)</label><input type="email" name="email" placeholder="name@cohort.edu" /></div>' +
       '</div><button class="btn" type="submit">Add to roster</button></form></div>' +
@@ -933,7 +933,7 @@
       '<p class="hint">' + data.students.length + ' student' + (data.students.length===1?'':'s') + ' enrolled. Click a row for their full attendance history.</p>' +
       (role === "governor" && data.students.length ? '<div class="toolbar" style="margin-bottom:10px;"><button class="btn ghost small" id="exportRosterCsv">Export CSV</button><button class="btn ghost small" id="exportRosterPdf">Export PDF</button></div>' : '') +
       (data.students.length === 0 ? '<div class="empty">No students added yet.</div>' :
-        '<table class="ledger"><thead><tr><th>Roll</th><th>Name</th><th>Email</th><th>Attendance</th>' + (role==="governor"?'<th></th>':'') + '</tr></thead><tbody>' + rows + '</tbody></table>') +
+        '<table class="ledger"><thead><tr><th>Matric No.</th><th>Name</th><th>Email</th><th>Attendance</th>' + (role==="governor"?'<th></th>':'') + '</tr></thead><tbody>' + rows + '</tbody></table>') +
       '</div>';
   }
 
@@ -945,7 +945,7 @@
     const hist = studentHistory(s.id);
     return '<div class="drawer-overlay" id="studentDrawerOverlay"><div class="drawer">' +
       '<button class="close" id="closeStudentDrawer">×</button>' +
-      '<h2>' + escapeHtml(s.name) + '</h2><p class="hint" style="margin-bottom:14px;">Roll ' + s.roll + (s.email ? ' · ' + escapeHtml(s.email) : '') + '</p>' +
+      '<h2>' + escapeHtml(s.name) + '</h2><p class="hint" style="margin-bottom:14px;">Matric ' + s.roll + (s.email ? ' · ' + escapeHtml(s.email) : '') + '</p>' +
       '<div class="stat-row" style="grid-template-columns:repeat(3,1fr);">' +
         '<div class="stat"><div class="num">' + (st.pct===null?"—":st.pct+"%") + '</div><div class="lbl">Attendance</div></div>' +
         '<div class="stat"><div class="num">' + st.present + '</div><div class="lbl">Present</div></div>' +
@@ -964,7 +964,7 @@
     const st = studentStats(s.id);
     const hist = studentHistory(s.id);
     const risk = st.pct !== null && st.pct < RISK_THRESHOLD;
-    return '<div class="panel"><h2>My attendance</h2><p class="hint">' + escapeHtml(s.name) + ' · Roll ' + s.roll + '</p>' +
+    return '<div class="panel"><h2>My attendance</h2><p class="hint">' + escapeHtml(s.name) + ' · Matric ' + s.roll + '</p>' +
       '<div class="stat-row">' +
         '<div class="stat"><div class="num" style="' + (risk?"color:var(--rose);":"") + '">' + (st.pct===null?"—":st.pct+"%") + '</div><div class="lbl">Overall attendance</div></div>' +
         '<div class="stat"><div class="num">' + st.present + '</div><div class="lbl">Sessions present</div></div>' +
@@ -1295,7 +1295,7 @@
     const exportLectureCsvBtn = document.getElementById("exportLectureCsv");
     if(exportLectureCsvBtn) exportLectureCsvBtn.addEventListener("click", () => {
       const lec = data.lectures.find(l => l.id === selectedLectureId);
-      const rows = [["Roll","Name","Status","Method","Signed at"]].concat(data.students.map(s => { const r = getRecord(selectedLectureId, s.id); return [s.roll, s.name, r.status, r.method||"", r.at?fmtDateTime(r.at):""]; }));
+      const rows = [["Matric No.","Name","Status","Method","Signed at"]].concat(data.students.map(s => { const r = getRecord(selectedLectureId, s.id); return [s.roll, s.name, r.status, r.method||"", r.at?fmtDateTime(r.at):""]; }));
       downloadCsv("attendance_" + (lec.title||"session").replace(/\s+/g,"_") + ".csv", rows);
     });
     const exportLecturePdfBtn = document.getElementById("exportLecturePdf");
@@ -1603,7 +1603,7 @@
     }));
     const exportRosterCsvBtn = document.getElementById("exportRosterCsv");
     if(exportRosterCsvBtn) exportRosterCsvBtn.addEventListener("click", () => {
-      const rows = [["Roll","Name","Email","Sessions Present","Total Sessions","Attendance %"]].concat(data.students.map(s => { const st = studentStats(s.id); return [s.roll, s.name, s.email||"", st.present, st.total, st.pct===null?"":st.pct]; }));
+      const rows = [["Matric No.","Name","Email","Sessions Present","Total Sessions","Attendance %"]].concat(data.students.map(s => { const st = studentStats(s.id); return [s.roll, s.name, s.email||"", st.present, st.total, st.pct===null?"":st.pct]; }));
       downloadCsv("roster_attendance_summary.csv", rows);
     });
     const exportRosterPdfBtn = document.getElementById("exportRosterPdf");
