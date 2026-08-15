@@ -273,7 +273,7 @@
   let studentToken = localStorage.getItem("studentToken") || null;
   let studentInfo = null;
   try{ studentInfo = JSON.parse(localStorage.getItem("studentInfo") || "null"); }catch(e){ studentInfo = null; }
-  if(studentToken && studentInfo && !authToken){ role = "student"; myIdentityId = studentInfo.id; }
+  if(studentToken && studentInfo && !authToken){ role = "student"; myIdentityId = studentInfo.id; activeTab = "mine"; }
 
   function setStudentSession(token, info){
     studentToken = token; studentInfo = info;
@@ -1087,6 +1087,12 @@
       document.getElementById("identityLabel").textContent = "Signed in as " + studentInfo.name + " (" + studentInfo.roll + ")";
     }
 
+    const GOVERNOR_ONLY_TABS = ["dashboard", "attendance", "roster"];
+    if(role === "student" && GOVERNOR_ONLY_TABS.includes(activeTab)) activeTab = "mine";
+    GOVERNOR_ONLY_TABS.forEach(tab => {
+      const btn = sideNav.querySelector('[data-tab="' + tab + '"]');
+      if(btn) btn.style.display = (role === "governor") ? "flex" : "none";
+    });
     document.querySelectorAll("#sideNav .navbtn").forEach(b => b.classList.toggle("active", b.dataset.tab === activeTab));
     document.querySelectorAll("#roleSeg button").forEach(b => b.classList.toggle("active", b.dataset.role === role));
 
