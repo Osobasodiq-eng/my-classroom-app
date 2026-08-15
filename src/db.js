@@ -44,6 +44,20 @@ async function init() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
+  // Uploaded files (materials, course outlines) live here rather than in
+  // the app_state JSON blob — that document is fetched in full on every
+  // page load, so embedding file bytes in it would make every visit
+  // (including the public check-in kiosk) download every uploaded file.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS files (
+      id TEXT PRIMARY KEY,
+      filename TEXT NOT NULL,
+      mime_type TEXT,
+      size_bytes INTEGER,
+      data BYTEA NOT NULL,
+      uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
   const { rows } = await pool.query('SELECT id FROM app_state WHERE id = 1');
   if (rows.length === 0) {
     await pool.query(
@@ -219,4 +233,21 @@ async function findStudentById(studentId) {
   return (data.students || []).find((s) => s.id === studentId) || null;
 }
 
-module.exports = { pool, init, getState, setState, signInAttendance, studentSignup, studentCredential, findStudentById, DEFAULT_DATA };
+async function saveFile(filename, mimeType, buffer) {
+  const id = 'file-' + crypto.randomBytes(8).toString('hex');
+  await pool.query(
+    'INSERT INTO files (id, filename, mime_type, size_bytes, data) VALUES ($1, $2, $3, $4, $5)',
+    [id, filename, mimeType || 'application/octet-stream', buffer.length, buffer]
+  );
+  return { id, filename, mimeType: mimeType || 'application/octet-stream', sizeBytes: buffer.length };
+}
+
+async function getFile(id) {
+  const { rows } = await pool.query(
+    'SELECT filename, mime_type, data FROM files WHERE id = $1',
+    [id]
+  );
+  return rows[0] || null;
+}
+
+module.exports = { pool, init, getState, setState, signInAttendance, studentSignup, studentCredential, findStudentById, saveFile, getFile, DEFAULT_DATA };

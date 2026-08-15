@@ -689,7 +689,7 @@
 
     const addForm = role === "governor" ? (
       '<div class="panel" style="margin-bottom:18px;"><h2>' + (editingMaterial ? "Edit material" : "Share reading material") + '</h2>' +
-      '<p class="hint">Attach a title, type, and optional link. Files themselves should be hosted elsewhere (e.g. Drive) and linked here.</p>' +
+      '<p class="hint">Attach a title and type, then either upload the file directly or link to it if it\'s hosted elsewhere (Drive, etc).</p>' +
       '<form id="materialForm"><input type="hidden" name="id" value="' + (editingMaterial ? editingMaterial.id : "") + '" />' +
       '<div class="form-row">' +
         '<div class="field" style="flex:2;"><label>Title</label><input required name="title" value="' + (editingMaterial?escapeAttr(editingMaterial.title):"") + '" placeholder="e.g. HBR — Managing Oneself" /></div>' +
@@ -698,7 +698,10 @@
       '</div>' +
       '<div class="form-row">' +
         '<div class="field"><label>Linked lecture</label><select name="lectureId" id="materialLectureSelect">' + lecOptionsFor(editingMaterial ? editingMaterial.courseId : "") + '</select></div>' +
-        '<div class="field"><label>Link (optional)</label><input type="url" name="link" value="' + (editingMaterial?escapeAttr(editingMaterial.link||""):"") + '" placeholder="https://..." /></div>' +
+      '</div>' +
+      '<div class="form-row">' +
+        '<div class="field"><label>Upload a file (any type, optional)</label><input type="file" name="file" id="materialFileInput" />' + (editingMaterial && editingMaterial.fileId ? '<p class="hint" style="margin-top:6px;">Currently attached: <a href="/api/files/' + escapeAttr(editingMaterial.fileId) + '" target="_blank" rel="noopener">' + escapeHtml(editingMaterial.fileName||"file") + '</a> — choosing a new file replaces it.</p>' : '') + '</div>' +
+        '<div class="field"><label>Or a link (optional)</label><input type="url" name="link" value="' + (editingMaterial?escapeAttr(editingMaterial.link||""):"") + '" placeholder="https://..." /></div>' +
       '</div>' +
       '<div class="form-row"><div class="field"><label>Tags (comma separated)</label><input name="tags" value="' + (editingMaterial?escapeAttr((editingMaterial.tags||[]).join(", ")):"") + '" placeholder="pre-read, core, optional" /></div></div>' +
       '<div class="form-row"><div class="field"><label>Notes (optional)</label><textarea name="notes" placeholder="Why it matters, what to focus on...">' + (editingMaterial?escapeHtml(editingMaterial.notes||""):"") + '</textarea></div></div>' +
@@ -723,6 +726,7 @@
         '<div class="msub">' + (course ? escapeHtml(course.name)+" · " : "") + (lec ? escapeHtml(lec.title) : "General") + " · " + fmtDate(m.date) + '</div>' +
         (m.notes ? '<p class="mnotes">' + escapeHtml(m.notes) + '</p>' : "") +
         (m.tags||[]).map(t => '<span class="tag-chip">' + escapeHtml(t) + '</span>').join("") +
+        (m.fileId ? '<div style="margin-top:6px;"><a href="/api/files/' + escapeAttr(m.fileId) + '" target="_blank" rel="noopener">Download ' + escapeHtml(m.fileName||"file") + ' →</a></div>' : "") +
         (m.link ? '<div style="margin-top:6px;"><a href="' + escapeAttr(m.link) + '" target="_blank" rel="noopener">Open resource →</a></div>' : "") +
         '</div>' + (role === "governor" ? '<div class="list-actions"><button class="btn small ghost" data-edit-material="' + m.id + '">Edit</button><button class="btn small danger" data-delete-material="' + m.id + '">Remove</button></div>' : "") +
       '</div>';
@@ -833,8 +837,8 @@
       '</div>' +
 
       '<p class="hint" style="margin:16px 0 6px; text-transform:uppercase; letter-spacing:.07em; font-size:11px;">Course outline</p>' +
-      '<div class="form-row"><div class="field"><label>Upload a text/markdown file (optional)</label><input type="file" name="outlineFile" accept=".txt,.md,text/plain,text/markdown" id="courseOutlineFileInput" /></div></div>' +
-      '<div class="form-row"><div class="field"><label>Outline text</label><textarea name="outlineText" rows="6" placeholder="Paste or type the syllabus / weekly outline here">' + (editingCourse?escapeHtml(editingCourse.outlineText||""):"") + '</textarea></div></div>' +
+      '<div class="form-row"><div class="field"><label>Upload a file (any type, optional)</label><input type="file" name="outlineFile" id="courseOutlineFileInput" />' + (editingCourse && editingCourse.outlineFileId ? '<p class="hint" style="margin-top:6px;">Currently attached: <a href="/api/files/' + escapeAttr(editingCourse.outlineFileId) + '" target="_blank" rel="noopener">' + escapeHtml(editingCourse.outlineFileName||"file") + '</a> — choosing a new file replaces it.</p>' : '') + '</div></div>' +
+      '<div class="form-row"><div class="field"><label>Outline text (optional)</label><textarea name="outlineText" rows="6" placeholder="Paste or type the syllabus / weekly outline here">' + (editingCourse?escapeHtml(editingCourse.outlineText||""):"") + '</textarea></div></div>' +
       '<div class="form-row"><div class="field"><label>Or a link to a hosted document (PDF, Drive, etc.)</label><input type="url" name="outlineLink" value="' + (editingCourse?escapeAttr(editingCourse.outlineLink||""):"") + '" placeholder="https://..." /></div></div>' +
 
       '<div class="form-row" style="gap:8px; margin-top:6px;"><button class="btn" type="submit">' + (editingCourse ? "Save changes" : "Add course") + '</button>' + (editingCourse ? '<button class="btn ghost" type="button" id="cancelCourseEdit">Cancel</button>' : '') + '</div>' +
@@ -879,13 +883,14 @@
       '<p class="hint" style="margin-bottom:6px; text-transform:uppercase; letter-spacing:.07em; font-size:11px;">Course outline</p>' +
       (role === "governor" ? (
         '<form id="outlineForm">' +
-        '<div class="form-row"><div class="field"><label>Upload a text/markdown file (optional)</label><input type="file" name="file" accept=".txt,.md,text/plain,text/markdown" id="outlineFileInput" /></div></div>' +
-        '<div class="form-row"><div class="field"><label>Outline text</label><textarea name="outlineText" rows="8" placeholder="Paste or type the syllabus / weekly outline here">' + escapeHtml(c.outlineText||"") + '</textarea></div></div>' +
+        '<div class="form-row"><div class="field"><label>Upload a file (any type, optional)</label><input type="file" name="file" id="outlineFileInput" />' + (c.outlineFileId ? '<p class="hint" style="margin-top:6px;">Currently attached: <a href="/api/files/' + escapeAttr(c.outlineFileId) + '" target="_blank" rel="noopener">' + escapeHtml(c.outlineFileName||"file") + '</a> — choosing a new file replaces it.</p>' : '') + '</div></div>' +
+        '<div class="form-row"><div class="field"><label>Outline text (optional)</label><textarea name="outlineText" rows="8" placeholder="Paste or type the syllabus / weekly outline here">' + escapeHtml(c.outlineText||"") + '</textarea></div></div>' +
         '<div class="form-row"><div class="field"><label>Or a link to a hosted document (PDF, Drive, etc.)</label><input type="url" name="outlineLink" value="' + escapeAttr(c.outlineLink||"") + '" placeholder="https://..." /></div></div>' +
         '<button class="btn small" type="submit">Save outline</button>' +
         '</form>'
       ) : (
-        (c.outlineText ? '<div class="assignment-body" style="white-space:pre-wrap; margin-bottom:10px;">' + escapeHtml(c.outlineText) + '</div>' : '<p class="hint">No outline text uploaded yet.</p>') +
+        (c.outlineFileId ? '<div style="margin-bottom:8px;"><a href="/api/files/' + escapeAttr(c.outlineFileId) + '" target="_blank" rel="noopener" style="color:var(--brass); font-size:13px;">Download ' + escapeHtml(c.outlineFileName||"outline file") + ' →</a></div>' : '') +
+        (c.outlineText ? '<div class="assignment-body" style="white-space:pre-wrap; margin-bottom:10px;">' + escapeHtml(c.outlineText) + '</div>' : (!c.outlineFileId ? '<p class="hint">No outline uploaded yet.</p>' : '')) +
         (c.outlineLink ? '<a href="' + escapeAttr(c.outlineLink) + '" target="_blank" rel="noopener" style="color:var(--brass); font-size:13px;">Open full outline document →</a>' : '')
       )) +
       '</div></div>';
@@ -969,6 +974,15 @@
       '<h2 style="margin-top:22px;">Session history</h2>' +
       (hist.length === 0 ? '<div class="empty">No lectures logged yet.</div>' : hist.map(h => '<div class="roster-row"><div class="who"><span class="name">' + escapeHtml(h.lecture.title) + '</span><span class="lecture-meta">' + escapeHtml(courseOf(h.lecture.courseId)?.name||"") + " · " + fmtDate(h.lecture.date) + '</span></div><span class="status-tag ' + h.rec.status + '">' + h.rec.status + '</span></div>').join("")) +
       '</div>';
+  }
+
+  async function uploadFile(file){
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch("/api/files", { method:"POST", headers:{"Authorization":"Bearer " + authToken}, body: fd });
+    const json = await res.json();
+    if(!res.ok) throw new Error(json.error || "Could not upload the file.");
+    return json; // {id, filename, mimeType, sizeBytes}
   }
 
   // ---------- STUDENT SIGN-IN / SIGN-UP ----------
@@ -1323,8 +1337,24 @@
         const fd = new FormData(materialForm);
         const id = fd.get("id");
         const tags = fd.get("tags").split(",").map(t => t.trim()).filter(Boolean);
+        const submitBtn = materialForm.querySelector('button[type="submit"]');
+        const existing = id ? data.materials.find(m => m.id === id) : null;
         const payload = {title: fd.get("title").trim(), type: fd.get("type"), courseId: fd.get("courseId") || null, lectureId: fd.get("lectureId") || null, link: fd.get("link").trim(), notes: fd.get("notes").trim(), tags};
-        if(id){ Object.assign(data.materials.find(m => m.id === id), payload); editingMaterialId = null; }
+        const chosenFile = document.getElementById("materialFileInput").files[0];
+        if(chosenFile){
+          submitBtn.disabled = true; submitBtn.textContent = "Uploading…";
+          try{
+            const uploaded = await uploadFile(chosenFile);
+            payload.fileId = uploaded.id; payload.fileName = uploaded.filename;
+          }catch(err){
+            alert(err.message || "Could not upload the file.");
+            submitBtn.disabled = false; submitBtn.textContent = id ? "Save changes" : "Add material";
+            return;
+          }
+        } else if(existing){
+          payload.fileId = existing.fileId; payload.fileName = existing.fileName;
+        }
+        if(id){ Object.assign(existing, payload); editingMaterialId = null; }
         else { data.materials.push(Object.assign({id: uid(), date: new Date().toISOString().slice(0,10)}, payload)); }
         await saveData(); render();
       });
@@ -1401,21 +1431,13 @@
         });
       });
 
-      const courseOutlineFileInput = document.getElementById("courseOutlineFileInput");
-      if(courseOutlineFileInput){
-        courseOutlineFileInput.addEventListener("change", () => {
-          const file = courseOutlineFileInput.files[0];
-          if(!file) return;
-          const reader = new FileReader();
-          reader.onload = () => { courseForm.querySelector('[name="outlineText"]').value = reader.result; };
-          reader.readAsText(file);
-        });
-      }
 
       courseForm.addEventListener("submit", async (e) => {
         e.preventDefault();
         const fd = new FormData(courseForm);
         const id = fd.get("id");
+        const existing = id ? data.courses.find(c => c.id === id) : null;
+        const submitBtn = courseForm.querySelector('button[type="submit"]');
         const payload = {
           code: fd.get("code").trim(),
           name: fd.get("name").trim(),
@@ -1424,7 +1446,21 @@
           outlineText: fd.get("outlineText").trim(),
           outlineLink: fd.get("outlineLink").trim(),
         };
-        if(id){ Object.assign(data.courses.find(c => c.id === id), payload); editingCourseId = null; }
+        const chosenOutlineFile = document.getElementById("courseOutlineFileInput").files[0];
+        if(chosenOutlineFile){
+          submitBtn.disabled = true; submitBtn.textContent = "Uploading…";
+          try{
+            const uploaded = await uploadFile(chosenOutlineFile);
+            payload.outlineFileId = uploaded.id; payload.outlineFileName = uploaded.filename;
+          }catch(err){
+            alert(err.message || "Could not upload the file.");
+            submitBtn.disabled = false; submitBtn.textContent = id ? "Save changes" : "Add course";
+            return;
+          }
+        } else if(existing){
+          payload.outlineFileId = existing.outlineFileId; payload.outlineFileName = existing.outlineFileName;
+        }
+        if(id){ Object.assign(existing, payload); editingCourseId = null; }
         else { data.courses.push(Object.assign({id: uid()}, payload)); }
         pendingLecturers = []; pendingLecturersFor = "__new__";
         await saveData(); render();
@@ -1473,21 +1509,24 @@
 
     const outlineForm = document.getElementById("outlineForm");
     if(outlineForm){
-      const fileInput = document.getElementById("outlineFileInput");
-      if(fileInput){
-        fileInput.addEventListener("change", () => {
-          const file = fileInput.files[0];
-          if(!file) return;
-          const reader = new FileReader();
-          reader.onload = () => { outlineForm.querySelector('[name="outlineText"]').value = reader.result; };
-          reader.readAsText(file);
-        });
-      }
       outlineForm.addEventListener("submit", async (e) => {
         e.preventDefault();
         const fd = new FormData(outlineForm);
         const course = courseOf(drawerCourseId);
         if(!course) return;
+        const submitBtn = outlineForm.querySelector('button[type="submit"]');
+        const chosenFile = document.getElementById("outlineFileInput").files[0];
+        if(chosenFile){
+          submitBtn.disabled = true; submitBtn.textContent = "Uploading…";
+          try{
+            const uploaded = await uploadFile(chosenFile);
+            course.outlineFileId = uploaded.id; course.outlineFileName = uploaded.filename;
+          }catch(err){
+            alert(err.message || "Could not upload the file.");
+            submitBtn.disabled = false; submitBtn.textContent = "Save outline";
+            return;
+          }
+        }
         course.outlineText = fd.get("outlineText").trim();
         course.outlineLink = fd.get("outlineLink").trim();
         await saveData(); render();

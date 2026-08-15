@@ -2,8 +2,14 @@ require('dotenv').config();
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
+const multer = require('multer');
 const db = require('./db');
 const { login, requireGovernor, studentSignup, studentLogin, requireStudent } = require('./auth');
+
+// Files are held in memory only long enough to write them to Postgres —
+// nothing is written to local disk, which matters on Render's free tier
+// where disk contents don't persist between deploys anyway.
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } }); // 15MB cap
 
 const REQUIRED_ENV = ['DATABASE_URL', 'JWT_SECRET', 'GOVERNOR_PASSWORD'];
 const missing = REQUIRED_ENV.filter((k) => !process.env[k]);
@@ -75,10 +81,49 @@ app.post('/api/checkin/:code/signin', requireStudent, async (req, res) => {
   }
 });
 
+// Governor-only upload — used for materials and course outline attachments.
+app.post('/api/files', requireGovernor, upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file received.' });
+  try {
+    const saved = await db.saveFile(req.file.originalname, req.file.mimetype, req.file.buffer);
+    res.json(saved);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Could not save the file.' });
+  }
+});
+
+// Public: materials and outlines need to be viewable by students, who
+// aren't Governor-authenticated. A file's id is a long random token, not
+// a guessable sequence, so this is the same "link is the access" model as
+// the check-in codes.
+app.get('/api/files/:id', async (req, res) => {
+  try {
+    const file = await db.getFile(req.params.id);
+    if (!file) return res.status(404).send('File not found.');
+    res.setHeader('Content-Type', file.mime_type || 'application/octet-stream');
+    res.setHeader('Content-Disposition', 'inline; filename="' + file.filename.replace(/"/g, '') + '"');
+    res.send(file.data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Could not load the file.');
+  }
+});
+
 // ---------- Static frontend ----------
 app.use(express.static(path.join(__dirname, '..', 'public')));
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
+});
+
+app.use((err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({ error: 'That file is too large — the limit is 15MB.' });
+    }
+    return res.status(400).json({ error: 'Could not process that upload.' });
+  }
+  next(err);
 });
 
 const PORT = process.env.PORT || 3000;
