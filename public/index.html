@@ -423,6 +423,22 @@
     }
     return {present, total, pct: total ? Math.round((present/total)*100) : null};
   }
+  function studentStatsByCourse(studentId){
+    const byCourse = {};
+    for(const lec of data.lectures){
+      const st = getRecord(lec.id, studentId).status;
+      if(st !== "present" && st !== "absent") continue;
+      const key = lec.courseId || "__none__";
+      if(!byCourse[key]) byCourse[key] = {present:0, total:0};
+      byCourse[key].total++;
+      if(st === "present") byCourse[key].present++;
+    }
+    return Object.keys(byCourse).map(courseId => {
+      const c = courseId === "__none__" ? null : courseOf(courseId);
+      const s = byCourse[courseId];
+      return {course: c, present: s.present, total: s.total, pct: s.total ? Math.round((s.present/s.total)*100) : null};
+    }).sort((a,b) => (a.course?a.course.name:"").localeCompare(b.course?b.course.name:""));
+  }
   function studentHistory(studentId){
     return [...data.lectures].sort((a,b)=>(a.date||"").localeCompare(b.date||"")).map(l => ({lecture:l, rec: getRecord(l.id, studentId)}));
   }
@@ -700,7 +716,7 @@
         '<div class="field"><label>Linked lecture</label><select name="lectureId" id="materialLectureSelect">' + lecOptionsFor(editingMaterial ? editingMaterial.courseId : "") + '</select></div>' +
       '</div>' +
       '<div class="form-row">' +
-        '<div class="field"><label>Upload a file (any type, optional)</label><input type="file" name="file" id="materialFileInput" />' + (editingMaterial && editingMaterial.fileId ? '<p class="hint" style="margin-top:6px;">Currently attached: <a href="/api/files/' + escapeAttr(editingMaterial.fileId) + '" target="_blank" rel="noopener">' + escapeHtml(editingMaterial.fileName||"file") + '</a> — choosing a new file replaces it.</p>' : '') + '</div>' +
+        '<div class="field"><label>Upload file(s) — any type, optional</label><input type="file" name="file" id="materialFileInput" multiple />' + (editingMaterial ? '<p class="hint" style="margin-top:4px;">Editing an existing entry only replaces it with one file — pick a single file here.</p>' : '<p class="hint" style="margin-top:4px;">Selecting several files adds one material entry per file, all sharing the details below.</p>') + (editingMaterial && editingMaterial.fileId ? '<p class="hint" style="margin-top:6px;">Currently attached: <a href="/api/files/' + escapeAttr(editingMaterial.fileId) + '" target="_blank" rel="noopener">' + escapeHtml(editingMaterial.fileName||"file") + '</a> — choosing a new file replaces it.</p>' : '') + '</div>' +
         '<div class="field"><label>Or a link (optional)</label><input type="url" name="link" value="' + (editingMaterial?escapeAttr(editingMaterial.link||""):"") + '" placeholder="https://..." /></div>' +
       '</div>' +
       '<div class="form-row"><div class="field"><label>Tags (comma separated)</label><input name="tags" value="' + (editingMaterial?escapeAttr((editingMaterial.tags||[]).join(", ")):"") + '" placeholder="pre-read, core, optional" /></div></div>' +
@@ -962,6 +978,7 @@
     const s = data.students.find(x => x.id === myIdentityId);
     if(!s) return '<div class="panel"><div class="empty">Student not found.</div></div>';
     const st = studentStats(s.id);
+    const byCourse = studentStatsByCourse(s.id);
     const hist = studentHistory(s.id);
     const risk = st.pct !== null && st.pct < RISK_THRESHOLD;
     return '<div class="panel"><h2>My attendance</h2><p class="hint">' + escapeHtml(s.name) + ' · Matric ' + s.roll + '</p>' +
@@ -971,6 +988,11 @@
         '<div class="stat"><div class="num">' + (st.total - st.present) + '</div><div class="lbl">Sessions absent</div></div>' +
       '</div>' +
       (risk ? '<div class="empty" style="border-color:rgba(193,102,107,0.4); color:var(--rose);">Your attendance is below the ' + RISK_THRESHOLD + '% mark. Reach out to the Governor if any sessions are marked incorrectly.</div>' : '') +
+      (byCourse.length ? '<h2 style="margin-top:22px;">By course</h2>' +
+        byCourse.map(c => {
+          const courseRisk = c.pct !== null && c.pct < RISK_THRESHOLD;
+          return '<div class="roster-row"><div class="who"><span class="name" style="font-size:14.5px;">' + escapeHtml(c.course ? c.course.name : "No course assigned") + '</span><span class="lecture-meta">' + c.present + '/' + c.total + ' sessions</span></div><span class="status-tag ' + (courseRisk?"absent":"present") + '">' + (c.pct===null?"—":c.pct+"%") + '</span></div>';
+        }).join("") : '') +
       '<h2 style="margin-top:22px;">Session history</h2>' +
       (hist.length === 0 ? '<div class="empty">No lectures logged yet.</div>' : hist.map(h => '<div class="roster-row"><div class="who"><span class="name">' + escapeHtml(h.lecture.title) + '</span><span class="lecture-meta">' + escapeHtml(courseOf(h.lecture.courseId)?.name||"") + " · " + fmtDate(h.lecture.date) + '</span></div><span class="status-tag ' + h.rec.status + '">' + h.rec.status + '</span></div>').join("")) +
       '</div>';
@@ -1342,12 +1364,40 @@
         const tags = fd.get("tags").split(",").map(t => t.trim()).filter(Boolean);
         const submitBtn = materialForm.querySelector('button[type="submit"]');
         const existing = id ? data.materials.find(m => m.id === id) : null;
-        const payload = {title: fd.get("title").trim(), type: fd.get("type"), courseId: fd.get("courseId") || null, lectureId: fd.get("lectureId") || null, link: fd.get("link").trim(), notes: fd.get("notes").trim(), tags};
-        const chosenFile = document.getElementById("materialFileInput").files[0];
-        if(chosenFile){
+        const basePayload = {title: fd.get("title").trim(), type: fd.get("type"), courseId: fd.get("courseId") || null, lectureId: fd.get("lectureId") || null, link: fd.get("link").trim(), notes: fd.get("notes").trim(), tags};
+        const chosenFiles = Array.from(document.getElementById("materialFileInput").files || []);
+
+        // Editing an existing entry always replaces with at most one file.
+        const filesToProcess = id ? chosenFiles.slice(0, 1) : chosenFiles;
+
+        if(filesToProcess.length > 1){
+          submitBtn.disabled = true;
+          let uploadedCount = 0;
+          for(const file of filesToProcess){
+            submitBtn.textContent = "Uploading " + (uploadedCount+1) + " of " + filesToProcess.length + "…";
+            try{
+              const uploaded = await uploadFile(file);
+              data.materials.push(Object.assign({id: uid(), date: new Date().toISOString().slice(0,10)}, basePayload, {
+                title: basePayload.title + " — " + uploaded.filename,
+                fileId: uploaded.id, fileName: uploaded.filename,
+              }));
+              uploadedCount++;
+            }catch(err){
+              alert("Uploaded " + uploadedCount + " of " + filesToProcess.length + " before this failed: " + (err.message || "unknown error"));
+              submitBtn.disabled = false; submitBtn.textContent = "Add material";
+              if(uploadedCount > 0){ await saveData(); render(); }
+              return;
+            }
+          }
+          await saveData(); render();
+          return;
+        }
+
+        const payload = Object.assign({}, basePayload);
+        if(filesToProcess.length === 1){
           submitBtn.disabled = true; submitBtn.textContent = "Uploading…";
           try{
-            const uploaded = await uploadFile(chosenFile);
+            const uploaded = await uploadFile(filesToProcess[0]);
             payload.fileId = uploaded.id; payload.fileName = uploaded.filename;
           }catch(err){
             alert(err.message || "Could not upload the file.");
