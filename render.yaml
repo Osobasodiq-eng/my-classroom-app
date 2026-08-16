@@ -19,5 +19,7 @@ services:
         generateValue: true
       - key: GOVERNOR_PASSWORD
         sync: false
+      - key: GEMINI_API_KEY
+        sync: false
       - key: DATABASE_SSL
         value: "true"

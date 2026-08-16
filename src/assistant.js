@@ -1,6 +1,6 @@
 const db = require('./db');
 
-const MODEL = 'claude-haiku-4-5-20251001';
+const MODEL = 'gemini-3.5-flash'; // update here if Google renames/deprecates this — see README
 const MAX_CONTEXT_CHARS = 40000; // ~10k tokens — keeps requests fast and cheap; see README for how to raise this
 const MAX_MESSAGES = 8; // only the most recent turns are sent, so a long chat doesn't balloon token cost
 const MAX_MESSAGE_CHARS = 2000;
@@ -62,8 +62,8 @@ function packContext(sections, budget) {
 }
 
 async function askAssistant(req, res) {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    return res.status(500).json({ error: 'The study assistant is not configured yet — ANTHROPIC_API_KEY is missing on the server.' });
+  if (!process.env.GEMINI_API_KEY) {
+    return res.status(500).json({ error: 'The study assistant is not configured yet — GEMINI_API_KEY is missing on the server.' });
   }
 
   const { courseId, messages } = req.body || {};
@@ -110,29 +110,41 @@ async function askAssistant(req, res) {
       return res.status(400).json({ error: 'Ask a question to get a response.' });
     }
 
-    const apiRes = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        max_tokens: 800,
-        system: systemPrompt,
-        messages: trimmedMessages,
-      }),
-    });
+    // Gemini uses "model" instead of "assistant" for the AI's turns, and
+    // wraps every turn's text in a `parts` array rather than a plain string.
+    const geminiContents = trimmedMessages.map((m) => ({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: m.content }],
+    }));
+
+    const apiRes = await fetch(
+      'https://generativelanguage.googleapis.com/v1beta/models/' + MODEL + ':generateContent',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': process.env.GEMINI_API_KEY,
+        },
+        body: JSON.stringify({
+          contents: geminiContents,
+          systemInstruction: { parts: [{ text: systemPrompt }] },
+          generationConfig: { maxOutputTokens: 800 },
+        }),
+      }
+    );
 
     if (!apiRes.ok) {
       const errBody = await apiRes.text();
-      console.error('Anthropic API error:', apiRes.status, errBody);
+      console.error('Gemini API error:', apiRes.status, errBody);
       return res.status(502).json({ error: 'The study assistant had trouble answering — try again in a moment.' });
     }
 
     const json = await apiRes.json();
-    const reply = (json.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
+    const candidate = (json.candidates || [])[0];
+    const reply = ((candidate && candidate.content && candidate.content.parts) || [])
+      .map((p) => p.text || '')
+      .join('\n')
+      .trim();
 
     res.json({ reply: reply || "I couldn't come up with an answer — try rephrasing your question.", sources: included.map((s) => s.label) });
   } catch (err) {
