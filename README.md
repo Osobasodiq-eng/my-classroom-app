@@ -145,19 +145,27 @@ constant at the top of `src/assistant.js` — one line, not a rebuild.
   PowerPoint files is a contained addition to `src/textExtract.js`, not a
   rebuild.
 - All the course's outline text and material text/notes are gathered and
-  sent to Claude as one block of context, capped at roughly 40,000
-  characters total (`MAX_CONTEXT_CHARS` in `src/assistant.js`). This is
-  **not** a smart retrieval system — it doesn't search for the most
-  relevant passage, it just includes everything in order (outline first,
-  then materials) until the budget runs out, truncating whatever's left
-  over. For a normal course's worth of readings this comfortably fits;
-  if a course accumulates a large library of long documents, older or
-  later-added materials may get cut. The honest upgrade path here, if it
-  becomes a real problem, is embeddings-based retrieval (find just the
-  relevant paragraphs instead of sending everything) — a real project on
-  its own, not a small tweak.
-- The system prompt instructs Claude to answer only from what's
-  provided and to say plainly when something isn't covered, rather than
+  sent to Gemini as one block of context, capped at roughly 150,000
+  characters total (`MAX_CONTEXT_CHARS` in `src/assistant.js`) — sized for
+  Gemini's much larger free context window, not the tighter budget an
+  earlier, token-metered version of this needed.
+  This is **not** true semantic search — it's simple keyword overlap, not
+  an embeddings model that understands meaning. Before packing, materials
+  are ranked by how many of the question's words appear in their title or
+  text (a title match counts extra), so asking about something specific
+  reliably pulls in the material actually named after it, even in a
+  course with many readings — the course outline always goes in first,
+  regardless of relevance, since it's foundational context for every
+  question. If a course accumulates a genuinely large library and several
+  documents happen to share the same keywords, ranking by word overlap
+  alone can still misjudge which ones matter most. The honest upgrade
+  path here, if that becomes a real problem, is embeddings-based
+  retrieval (understanding meaning, not just matching words) — a real
+  project on its own, not a small tweak.
+- The system prompt instructs Gemini to lead with what's in the course
+  materials and say plainly when something isn't covered, rather than
+  silently guessing — but it's also allowed to fall back to general
+  knowledge when asked, as long as it's clear about which is which.
   filling gaps from its own training. It's a strong instruction, not a
   hard technical guarantee — treat answers as a study aid, not an
   authoritative source, the same way you'd treat any AI tool.

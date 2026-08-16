@@ -1,10 +1,17 @@
 const db = require('./db');
 
 const MODEL = 'gemini-3.5-flash'; // update here if Google renames/deprecates this — see README
-const MAX_CONTEXT_CHARS = 40000; // ~10k tokens — keeps requests fast and cheap; see README for how to raise this
+// Gemini's free tier has a 1M-token context window and no per-token cost,
+// so there's no reason to keep this small the way it would need to be on
+// a paid, token-metered API — 150k characters is roughly 35-40k tokens,
+// comfortably inside Gemini's per-minute token limit even with several
+// materials attached, while still leaving room to raise it further if a
+// course's reading list genuinely needs more.
+const MAX_CONTEXT_CHARS = 150000;
 const MAX_MESSAGES = 8; // only the most recent turns are sent, so a long chat doesn't balloon token cost
 const MAX_MESSAGE_CHARS = 2000;
 const RATE_LIMIT_PER_HOUR = 30;
+const STOPWORDS = new Set(['the','a','an','is','are','was','were','be','been','of','to','in','on','for','and','or','with','what','does','do','did','how','why','tell','me','about','this','that','it','its','i','you','your','my','can','could','would','should','explain','describe','summarize','summarise']);
 
 // In-memory only: resets on redeploy/restart, and wouldn't coordinate
 // across multiple server instances. Both are fine at this app's scale —
@@ -25,16 +32,41 @@ function checkRateLimit(identity) {
   return true;
 }
 
+function extractKeywords(question) {
+  return (question.toLowerCase().match(/[a-z0-9]+/g) || [])
+    .filter((w) => w.length >= 3 && !STOPWORDS.has(w));
+}
+
+// Simple keyword-overlap scoring — not semantic search, just "how many of
+// the question's distinct words show up in this material's title or
+// text." A title match counts extra, since a material literally named
+// after what's being asked about (e.g. asking about "Partnership Act"
+// when a material is titled "Partnership Act, 1890") should win even if
+// a longer, less relevant document happens to contain a few of the same
+// common words.
+function scoreRelevance(section, keywords) {
+  if (keywords.length === 0) return 0;
+  const labelLower = section.label.toLowerCase();
+  const textLower = section.text.toLowerCase();
+  let score = 0;
+  for (const kw of keywords) {
+    if (labelLower.includes(kw)) score += 3;
+    if (textLower.includes(kw)) score += 1;
+  }
+  return score;
+}
+
 async function buildCourseContext(courseData) {
   const { course, materials } = courseData;
-  const sections = [];
+  const coreSections = [];
+  const materialSections = [];
 
   if (course.outlineText && course.outlineText.trim()) {
-    sections.push({ label: 'Course outline', text: course.outlineText.trim() });
+    coreSections.push({ label: 'Course outline', text: course.outlineText.trim() });
   }
   if (course.outlineFileId) {
     const text = await db.getFileText(course.outlineFileId);
-    if (text.trim()) sections.push({ label: 'Course outline document (' + (course.outlineFileName || 'file') + ')', text: text.trim() });
+    if (text.trim()) coreSections.push({ label: 'Course outline document (' + (course.outlineFileName || 'file') + ')', text: text.trim() });
   }
   for (const m of materials) {
     let text = '';
@@ -51,9 +83,9 @@ async function buildCourseContext(courseData) {
     // title alone lets the assistant tell a student "there's a reading
     // called X, but I can't read its contents, check the link" instead of
     // silently pretending the material doesn't exist at all.
-    sections.push({ label: 'Material: ' + m.title + (m.type ? ' (' + m.type + ')' : ''), text: text.trim() || '[No readable content available for this material — only its title is known.]' });
+    materialSections.push({ label: 'Material: ' + m.title + (m.type ? ' (' + m.type + ')' : ''), text: text.trim() || '[No readable content available for this material — only its title is known.]' });
   }
-  return sections;
+  return { coreSections, materialSections };
 }
 
 function packContext(sections, budget) {
@@ -90,15 +122,24 @@ async function askAssistant(req, res) {
     if (!course) return res.status(404).json({ error: 'Course not found.' });
     const materials = (data.materials || []).filter((m) => m.courseId === courseId);
 
-    const sections = await buildCourseContext({ course, materials });
-    if (sections.length === 0) {
+    const { coreSections, materialSections } = await buildCourseContext({ course, materials });
+    if (coreSections.length === 0 && materialSections.length === 0) {
       return res.json({
         reply: "There's nothing uploaded for " + course.name + " yet — no outline text or readable material files. Ask your Governor to add some, then try again.",
         sources: [],
       });
     }
 
-    const included = packContext(sections, MAX_CONTEXT_CHARS);
+    // Rank materials by relevance to the actual question asked, so with a
+    // large reading list the ones that matter to *this* question are what
+    // survives the budget — not just whichever were added first.
+    const latestQuestion = [...messages].reverse().find((m) => m && m.role === 'user' && typeof m.content === 'string');
+    const keywords = latestQuestion ? extractKeywords(latestQuestion.content) : [];
+    const rankedMaterials = keywords.length
+      ? [...materialSections].sort((a, b) => scoreRelevance(b, keywords) - scoreRelevance(a, keywords))
+      : materialSections;
+
+    const included = packContext([...coreSections, ...rankedMaterials], MAX_CONTEXT_CHARS);
     const contextBlock = included.map((s) => '### ' + s.label + '\n' + s.text).join('\n\n');
 
     const systemPrompt =
