@@ -334,10 +334,18 @@ async function getFileText(id) {
   );
   if (!rows.length) return '';
   const file = rows[0];
-  if (file.extraction_done) return file.extracted_text || '';
+  if (file.extraction_done && file.extracted_text) return file.extracted_text;
   const { extractText } = require('./textExtract');
   const text = await extractText(file.mime_type, file.filename, file.data);
-  await pool.query('UPDATE files SET extracted_text = $1, extraction_done = true WHERE id = $2', [text, id]);
+  // Only cache real successes. An empty result might be a genuinely
+  // unsupported file (a scanned/image-only PDF, for instance) or it might
+  // be a transient hiccup — caching it as "done" either way would mean a
+  // file that failed once stays permanently blank to the assistant, even
+  // after a fix. Retrying a still-empty file each time is cheap; silently
+  // and permanently losing a document's content is not.
+  if (text.trim()) {
+    await pool.query('UPDATE files SET extracted_text = $1, extraction_done = true WHERE id = $2', [text, id]);
+  }
   return text;
 }
 

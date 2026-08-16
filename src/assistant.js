@@ -42,8 +42,16 @@ async function buildCourseContext(courseData) {
     if (m.fileId) {
       const fileText = await db.getFileText(m.fileId);
       if (fileText.trim()) text += fileText.trim();
+      else text += '[This material has an attached file, but no readable text could be extracted from it — it may be a scanned image, a slide deck, or an unsupported format. Its title and any notes above are all that\'s available.]\n';
     }
-    if (text.trim()) sections.push({ label: 'Material: ' + m.title, text: text.trim() });
+    if (m.link && m.link.trim()) {
+      text += (text ? '\n' : '') + 'External link (content not directly readable): ' + m.link.trim() + '\n';
+    }
+    // Even a material with no readable text still gets a section — its
+    // title alone lets the assistant tell a student "there's a reading
+    // called X, but I can't read its contents, check the link" instead of
+    // silently pretending the material doesn't exist at all.
+    sections.push({ label: 'Material: ' + m.title + (m.type ? ' (' + m.type + ')' : ''), text: text.trim() || '[No readable content available for this material — only its title is known.]' });
   }
   return sections;
 }
@@ -95,10 +103,13 @@ async function askAssistant(req, res) {
 
     const systemPrompt =
       'You are a study assistant for the course "' + course.name + '"' + (course.code ? ' (' + course.code + ')' : '') + '.\n' +
-      'Answer ONLY using the course material excerpts below. Do not use outside knowledge, even if you know the answer — ' +
-      "this is a strict rule. If the excerpts don't cover what's asked, say plainly that it isn't covered in the uploaded " +
-      'materials for this course, and suggest the student ask their lecturer. Keep answers concise. When it helps, mention ' +
-      'which material an answer came from (e.g. "According to the course outline..." or "Based on <material title>...").\n\n' +
+      'Prioritize the course material excerpts below — they reflect what this specific course actually covers, which may ' +
+      'differ from general knowledge (different terminology, emphasis, or approach). When the excerpts answer the question, ' +
+      'lead with that and say so (e.g. "According to the course outline..." or "Based on <material title>..."). If the ' +
+      "excerpts don't cover what's asked, or only partly cover it, you may use your own general knowledge to fill the gap — " +
+      'but clearly say when you\'re doing that (e.g. "This isn\'t covered in your course materials, but generally speaking...") ' +
+      "so the student knows what came from their course versus general knowledge. Don't blend the two without flagging it. " +
+      'Keep answers concise.\n\n' +
       '--- COURSE MATERIALS ---\n' + contextBlock + '\n--- END COURSE MATERIALS ---';
 
     const trimmedMessages = messages

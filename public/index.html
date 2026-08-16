@@ -1027,7 +1027,7 @@
 
     return '<div class="panel">' +
       '<div class="card-title-row" style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">' +
-        '<div><h2 style="margin:0;">Ask AI</h2><p class="hint" style="margin-top:2px;">Answers are grounded only in this course\'s outline and uploaded materials.</p></div>' +
+        '<div><h2 style="margin:0;">Ask AI</h2><p class="hint" style="margin-top:2px;">Prioritizes this course\'s outline and materials, and says clearly when it\'s falling back to general knowledge.</p></div>' +
         '<div style="display:flex; gap:8px; align-items:center;">' +
           '<select id="assistantCourseSelect">' + data.courses.map(c => '<option value="' + c.id + '" ' + (c.id===assistantCourseId?'selected':'') + '>' + escapeHtml(c.name) + '</option>').join("") + '</select>' +
           '<button class="btn ghost small" type="button" id="assistantNewChat">New chat</button>' +
