@@ -4,7 +4,8 @@ const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const db = require('./db');
-const { login, requireGovernor, studentSignup, studentLogin, requireStudent, resetStudentPassword } = require('./auth');
+const { login, requireGovernor, studentSignup, studentLogin, requireStudent, resetStudentPassword, requireAnyAuth } = require('./auth');
+const { askAssistant } = require('./assistant');
 
 // Files are held in memory only long enough to write them to Postgres —
 // nothing is written to local disk, which matters on Render's free tier
@@ -31,6 +32,7 @@ app.post('/api/auth/login', login);
 app.post('/api/auth/student-signup', studentSignup);
 app.post('/api/auth/student-login', studentLogin);
 app.post('/api/students/:studentId/reset-password', requireGovernor, resetStudentPassword);
+app.post('/api/assistant/ask', requireAnyAuth, askAssistant);
 
 // Public: anyone with the site URL can read the register — this mirrors a
 // physical noticeboard, and students need it to populate the check-in

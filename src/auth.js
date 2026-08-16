@@ -128,4 +128,20 @@ async function resetStudentPassword(req, res) {
   }
 }
 
-module.exports = { login, requireGovernor, studentSignup, studentLogin, requireStudent, resetStudentPassword };
+function requireAnyAuth(req, res, next) {
+  const header = req.headers.authorization || '';
+  const [scheme, token] = header.split(' ');
+  if (scheme !== 'Bearer' || !token) {
+    return res.status(401).json({ error: 'Sign in to use the study assistant.' });
+  }
+  try {
+    const payload = jwt.verify(token, SECRET);
+    if (payload.role !== 'governor' && payload.role !== 'student') throw new Error('bad role');
+    req.auth = payload;
+    next();
+  } catch (err) {
+    return res.status(401).json({ error: 'Your session expired — sign in again.' });
+  }
+}
+
+module.exports = { login, requireGovernor, studentSignup, studentLogin, requireStudent, resetStudentPassword, requireAnyAuth };

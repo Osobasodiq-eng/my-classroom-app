@@ -58,6 +58,10 @@ async function init() {
       uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
+  // Added after the files table already existed in earlier deploys —
+  // IF NOT EXISTS makes this safe to run again on every boot.
+  await pool.query(`ALTER TABLE files ADD COLUMN IF NOT EXISTS extracted_text TEXT;`);
+  await pool.query(`ALTER TABLE files ADD COLUMN IF NOT EXISTS extraction_done BOOLEAN NOT NULL DEFAULT false;`);
   const { rows } = await pool.query('SELECT id FROM app_state WHERE id = 1');
   if (rows.length === 0) {
     await pool.query(
@@ -319,4 +323,22 @@ async function finalizeExpiredSessions() {
   }
 }
 
-module.exports = { pool, init, getState, setState, signInAttendance, studentSignup, studentCredential, findStudentById, resetStudentPassword, saveFile, getFile, finalizeExpiredSessions, DEFAULT_DATA };
+// Extraction happens on first use, not on upload — uploading stays fast
+// (no waiting on PDF parsing), and it means files uploaded before the
+// study assistant existed still get grounded the first time anyone asks
+// about them. Result is cached so the same file is never re-parsed.
+async function getFileText(id) {
+  const { rows } = await pool.query(
+    'SELECT filename, mime_type, data, extracted_text, extraction_done FROM files WHERE id = $1',
+    [id]
+  );
+  if (!rows.length) return '';
+  const file = rows[0];
+  if (file.extraction_done) return file.extracted_text || '';
+  const { extractText } = require('./textExtract');
+  const text = await extractText(file.mime_type, file.filename, file.data);
+  await pool.query('UPDATE files SET extracted_text = $1, extraction_done = true WHERE id = $2', [text, id]);
+  return text;
+}
+
+module.exports = { pool, init, getState, setState, signInAttendance, studentSignup, studentCredential, findStudentById, resetStudentPassword, saveFile, getFile, getFileText, finalizeExpiredSessions, DEFAULT_DATA };
