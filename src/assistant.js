@@ -1,6 +1,6 @@
 const db = require('./db');
 
-const MODEL = 'gemini-2.5-flash'; // established model with a generous, stable free tier — update here if Google renames/deprecates this, see README
+const MODEL = 'gemini-3.6-flash'; // current Stable-tier model per https://ai.google.dev/gemini-api/docs/models — see README if this needs updating again
 // Gemini's free tier has a 1M-token context window and no per-token cost,
 // so there's no reason to keep this small the way it would need to be on
 // a paid, token-metered API — 150k characters is roughly 35-40k tokens,
@@ -190,6 +190,9 @@ async function askAssistant(req, res) {
       console.error('Gemini API error:', apiRes.status, errBody);
       if (apiRes.status === 429) {
         return res.status(429).json({ error: "Google's free tier has a request limit that's been hit for the moment — wait about a minute and try again. This isn't this app's own rate limit, it's Gemini's free quota." });
+      }
+      if (apiRes.status === 404) {
+        return res.status(500).json({ error: "The AI model this app points at (" + MODEL + ") isn't reachable from this API key right now — Google's model lineup shifts every few weeks. Check https://ai.google.dev/gemini-api/docs/models for a current 'Stable' model name and update the MODEL constant in src/assistant.js." });
       }
       return res.status(502).json({ error: 'The study assistant had trouble answering — try again in a moment.' });
     }
