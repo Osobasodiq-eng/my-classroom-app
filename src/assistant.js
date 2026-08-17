@@ -1,6 +1,6 @@
 const db = require('./db');
 
-const MODEL = 'gemini-3.5-flash'; // update here if Google renames/deprecates this — see README
+const MODEL = 'gemini-2.5-flash'; // established model with a generous, stable free tier — update here if Google renames/deprecates this, see README
 // Gemini's free tier has a 1M-token context window and no per-token cost,
 // so there's no reason to keep this small the way it would need to be on
 // a paid, token-metered API — 150k characters is roughly 35-40k tokens,
@@ -188,6 +188,9 @@ async function askAssistant(req, res) {
     if (!apiRes.ok) {
       const errBody = await apiRes.text();
       console.error('Gemini API error:', apiRes.status, errBody);
+      if (apiRes.status === 429) {
+        return res.status(429).json({ error: "Google's free tier has a request limit that's been hit for the moment — wait about a minute and try again. This isn't this app's own rate limit, it's Gemini's free quota." });
+      }
       return res.status(502).json({ error: 'The study assistant had trouble answering — try again in a moment.' });
     }
 
