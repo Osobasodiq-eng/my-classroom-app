@@ -1,22 +1,26 @@
 const db = require('./db');
 
-const MODEL = 'gemini-3.6-flash'; // current Stable-tier model per https://ai.google.dev/gemini-api/docs/models — see README if this needs updating again
-// Gemini's free tier has a 1M-token context window and no per-token cost,
-// so there's no reason to keep this small the way it would need to be on
-// a paid, token-metered API — 150k characters is roughly 35-40k tokens,
-// comfortably inside Gemini's per-minute token limit even with several
-// materials attached, while still leaving room to raise it further if a
-// course's reading list genuinely needs more.
-const MAX_CONTEXT_CHARS = 150000;
-const MAX_MESSAGES = 8; // only the most recent turns are sent, so a long chat doesn't balloon token cost
-const MAX_MESSAGE_CHARS = 2000;
+const MODEL = 'openai/gpt-oss-120b'; // Groq's current recommended general-purpose model — see README if this needs updating
+// Groq's free tier caps at 6,000 tokens/minute (TPM), shared across every
+// request the whole app makes — far tighter than a typical LLM API's
+// context window. This budget is kept small on purpose: ~9,000 characters
+// is roughly 2,200 tokens, leaving room for the system prompt overhead,
+// a few chat turns, and Groq's own output tokens without blowing the
+// per-minute cap on a single request — important since with many
+// students using this, several requests can land in the same minute and
+// all draw from the same shared 6,000 TPM pool.
+const MAX_CONTEXT_CHARS = 9000;
+const MAX_MESSAGES = 6; // trimmed further than a larger-context provider would need, for the same TPM reason
+const MAX_MESSAGE_CHARS = 1200;
 const RATE_LIMIT_PER_HOUR = 30;
 const STOPWORDS = new Set(['the','a','an','is','are','was','were','be','been','of','to','in','on','for','and','or','with','what','does','do','did','how','why','tell','me','about','this','that','it','its','i','you','your','my','can','could','would','should','explain','describe','summarize','summarise']);
 
 // In-memory only: resets on redeploy/restart, and wouldn't coordinate
 // across multiple server instances. Both are fine at this app's scale —
 // this exists to blunt runaway API cost from one identity hammering the
-// endpoint, not to be a precise or durable limiter.
+// endpoint, not to be a precise or durable limiter. It also does NOT
+// protect against Groq's own shared rate limits being hit by many
+// different students at once — see the README's note on scaling.
 const rateLimitLog = new Map();
 
 function checkRateLimit(identity) {
@@ -43,7 +47,9 @@ function extractKeywords(question) {
 // after what's being asked about (e.g. asking about "Partnership Act"
 // when a material is titled "Partnership Act, 1890") should win even if
 // a longer, less relevant document happens to contain a few of the same
-// common words.
+// common words. This matters even more now that the context budget is
+// small — only a couple of materials fit per request, so picking the
+// right ones is most of the job.
 function scoreRelevance(section, keywords) {
   if (keywords.length === 0) return 0;
   const labelLower = section.label.toLowerCase();
@@ -102,8 +108,8 @@ function packContext(sections, budget) {
 }
 
 async function askAssistant(req, res) {
-  if (!process.env.GEMINI_API_KEY) {
-    return res.status(500).json({ error: 'The study assistant is not configured yet — GEMINI_API_KEY is missing on the server.' });
+  if (!process.env.GROQ_API_KEY) {
+    return res.status(500).json({ error: 'The study assistant is not configured yet — GROQ_API_KEY is missing on the server.' });
   }
 
   const { courseId, messages } = req.body || {};
@@ -131,8 +137,9 @@ async function askAssistant(req, res) {
     }
 
     // Rank materials by relevance to the actual question asked, so with a
-    // large reading list the ones that matter to *this* question are what
-    // survives the budget — not just whichever were added first.
+    // large reading list — or, on this provider, a small context budget —
+    // the ones that matter to *this* question are what survives, not just
+    // whichever were added first.
     const latestQuestion = [...messages].reverse().find((m) => m && m.role === 'user' && typeof m.content === 'string');
     const keywords = latestQuestion ? extractKeywords(latestQuestion.content) : [];
     const rankedMaterials = keywords.length
@@ -162,47 +169,38 @@ async function askAssistant(req, res) {
       return res.status(400).json({ error: 'Ask a question to get a response.' });
     }
 
-    // Gemini uses "model" instead of "assistant" for the AI's turns, and
-    // wraps every turn's text in a `parts` array rather than a plain string.
-    const geminiContents = trimmedMessages.map((m) => ({
-      role: m.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: m.content }],
-    }));
+    // Groq is OpenAI-compatible: the system prompt is just the first
+    // message in the array (role "system"), not a separate top-level
+    // field the way Gemini and Anthropic both wanted it.
+    const groqMessages = [{ role: 'system', content: systemPrompt }, ...trimmedMessages];
 
-    const apiRes = await fetch(
-      'https://generativelanguage.googleapis.com/v1beta/models/' + MODEL + ':generateContent',
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-goog-api-key': process.env.GEMINI_API_KEY,
-        },
-        body: JSON.stringify({
-          contents: geminiContents,
-          systemInstruction: { parts: [{ text: systemPrompt }] },
-          generationConfig: { maxOutputTokens: 800 },
-        }),
-      }
-    );
+    const apiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + process.env.GROQ_API_KEY,
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        messages: groqMessages,
+        max_tokens: 800,
+      }),
+    });
 
     if (!apiRes.ok) {
       const errBody = await apiRes.text();
-      console.error('Gemini API error:', apiRes.status, errBody);
+      console.error('Groq API error:', apiRes.status, errBody);
       if (apiRes.status === 429) {
-        return res.status(429).json({ error: "Google's free tier has a request limit that's been hit for the moment — wait about a minute and try again. This isn't this app's own rate limit, it's Gemini's free quota." });
+        return res.status(429).json({ error: "Groq's free tier has a request or token limit that's been hit for the moment — wait about a minute and try again. This isn't this app's own rate limit, it's Groq's free quota, and it's shared across everyone using the assistant right now." });
       }
-      if (apiRes.status === 404) {
-        return res.status(500).json({ error: "The AI model this app points at (" + MODEL + ") isn't reachable from this API key right now — Google's model lineup shifts every few weeks. Check https://ai.google.dev/gemini-api/docs/models for a current 'Stable' model name and update the MODEL constant in src/assistant.js." });
+      if (apiRes.status === 404 || apiRes.status === 400) {
+        return res.status(500).json({ error: "The AI model this app points at (" + MODEL + ") isn't reachable right now — Groq's model lineup changes often. Check https://console.groq.com/docs/models for a current model name and update the MODEL constant in src/assistant.js." });
       }
       return res.status(502).json({ error: 'The study assistant had trouble answering — try again in a moment.' });
     }
 
     const json = await apiRes.json();
-    const candidate = (json.candidates || [])[0];
-    const reply = ((candidate && candidate.content && candidate.content.parts) || [])
-      .map((p) => p.text || '')
-      .join('\n')
-      .trim();
+    const reply = ((json.choices || [])[0] && json.choices[0].message && json.choices[0].message.content || '').trim();
 
     res.json({ reply: reply || "I couldn't come up with an answer — try rephrasing your question.", sources: included.map((s) => s.label) });
   } catch (err) {

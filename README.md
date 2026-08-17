@@ -105,33 +105,71 @@ actually clicks "Download" fetches that file's bytes.
 ### AI study assistant ("Ask AI")
 
 Students (and the Governor) can ask questions about a course and get
-answers grounded only in that course's outline and uploaded materials —
-not the model's general knowledge. Runs on Google's Gemini API rather
-than a paid provider, specifically because Gemini has a genuinely free,
-permanent tier (no credit card, no expiration) suitable for a classroom's
-usage level — unlike most alternatives, which only offer a small one-time
-trial credit.
+answers grounded in that course's outline and uploaded materials first,
+falling back to general knowledge — clearly labeled as such — when the
+materials don't cover it. Runs on Groq's API, which serves fast
+open-weight models on a genuinely free, permanent tier (no credit card,
+no expiration).
 
 Needs one more environment variable:
 
 ```
-GEMINI_API_KEY=...
+GROQ_API_KEY=...
 ```
 
-Get a free key from https://aistudio.google.com/apikey — sign in with a
-Google account, no billing setup required — and add it in Render's
-Environment tab. Without it, the "Ask AI" tab still shows, but every
-question returns a clear "not configured yet" message instead of a
-server error.
+Get a free key from https://console.groq.com/keys — sign in with an
+email or Google account, no billing setup required — and add it in
+Render's Environment tab. Without it, the "Ask AI" tab still shows, but
+every question returns a clear "not configured yet" message instead of
+a server error.
 
-**On the free tier's limits:** roughly 1,000+ requests/day and single-
-digit requests/minute on the Flash model this uses, which comfortably
-covers normal classroom use. Google's free-tier terms also allow your
-prompts to be used to improve their models — worth knowing, though not
-unusual for a free API tier, and not something course outlines and
-public readings are especially sensitive about. If Google ever renames
-or retires the specific model this points at, update the `MODEL`
-constant at the top of `src/assistant.js` — one line, not a rebuild.
+**This app has already been through two providers and several model
+names during setup** (Anthropic needed paid credit; a too-new Gemini
+preview model hit tight limits; the next Gemini choice stopped being
+reachable; Groq's own tutorial-standard model turned out to have been
+shut down the day before this was wired up). Whichever provider ends up
+behind this, treat the exact model name as something that will need
+updating occasionally, not something to set once and forget — it's one
+line in `src/assistant.js`, not a rebuild. If "Ask AI" ever fails, the
+error message names exactly what's wrong:
+
+- **A message mentioning a rate limit** → the provider's own free-tier
+  cap was hit — wait a minute, it clears on its own. Not a bug.
+- **A message naming the model directly** → that model is no longer
+  reachable. Check https://console.groq.com/docs/models for a current
+  name and update the `MODEL` constant.
+- Anything else → check Render's Logs tab, search for "Groq API error",
+  and the status code + message will be right there.
+
+**On scaling to ~160 students — read this before relying on it for a
+real class.** Groq's free tier gives 30 requests/minute, but only 6,000
+*tokens* per minute, shared across every request the whole app makes —
+not per student, the whole app. That ceiling is what this app's context
+budget is now built around (kept small, ranked by relevance — see
+below), but the ceiling itself doesn't move. In practice: light,
+spread-out use across a class of 160 will generally work. A burst —
+say, many students asking questions in the same few minutes right
+before an exam — will hit the shared limit, and whoever's request
+lands after the cap will get a clear "try again in a minute" message
+rather than a broken one, but they will get that message. No free tier
+from any provider is actually built for a synchronized burst at this
+scale; that's the honest trade-off of "free," not a bug specific to
+this app or to Groq. If that becomes a real problem once you have usage
+data, the paths forward, roughly in order of effort:
+1. **A few dollars/month in paid Groq credit** — removes the shared
+   ceiling almost entirely; at this usage level the actual cost would be
+   small.
+2. **Route across multiple free providers** (Groq + Gemini + others) so
+   one ceiling being hit doesn't stop the whole class — more moving
+   parts, not a small change.
+3. **Do nothing** — accept that free means occasional waits during
+   bursts, which may be perfectly fine depending on how central this
+   feature ends up being.
+
+Google's free-tier terms (and most free LLM tiers generally, including
+Groq's) allow your prompts to be used to improve their models — worth
+knowing, though not unusual for a free API tier, and not something
+course outlines and public readings are especially sensitive about.
 
 **How grounding actually works, and its limits:**
 
@@ -145,39 +183,41 @@ constant at the top of `src/assistant.js` — one line, not a rebuild.
   PowerPoint files is a contained addition to `src/textExtract.js`, not a
   rebuild.
 - All the course's outline text and material text/notes are gathered and
-  sent to Gemini as one block of context, capped at roughly 150,000
-  characters total (`MAX_CONTEXT_CHARS` in `src/assistant.js`) — sized for
-  Gemini's much larger free context window, not the tighter budget an
-  earlier, token-metered version of this needed.
-  This is **not** true semantic search — it's simple keyword overlap, not
-  an embeddings model that understands meaning. Before packing, materials
-  are ranked by how many of the question's words appear in their title or
-  text (a title match counts extra), so asking about something specific
-  reliably pulls in the material actually named after it, even in a
-  course with many readings — the course outline always goes in first,
-  regardless of relevance, since it's foundational context for every
-  question. If a course accumulates a genuinely large library and several
-  documents happen to share the same keywords, ranking by word overlap
-  alone can still misjudge which ones matter most. The honest upgrade
-  path here, if that becomes a real problem, is embeddings-based
-  retrieval (understanding meaning, not just matching words) — a real
-  project on its own, not a small tweak.
-- The system prompt instructs Gemini to lead with what's in the course
-  materials and say plainly when something isn't covered, rather than
-  silently guessing — but it's also allowed to fall back to general
-  knowledge when asked, as long as it's clear about which is which.
-  filling gaps from its own training. It's a strong instruction, not a
-  hard technical guarantee — treat answers as a study aid, not an
-  authoritative source, the same way you'd treat any AI tool.
+  sent as context, capped at roughly 9,000 characters total
+  (`MAX_CONTEXT_CHARS` in `src/assistant.js`) — small on purpose, sized
+  to comfortably fit under Groq's shared 6,000-token-per-minute ceiling
+  even when several requests land in the same minute. This is **not**
+  true semantic search — it's simple keyword overlap, not an embeddings
+  model that understands meaning. Before packing, materials are ranked
+  by how many of the question's words appear in their title or text (a
+  title match counts extra), so asking about something specific reliably
+  pulls in the material actually named after it — the course outline
+  always goes in first, regardless of relevance, since it's foundational
+  context for every question. With a budget this tight, usually only the
+  outline plus one or two materials fit per question; for a course with
+  a large reading list, that means most materials never make it into any
+  single answer's context, only whichever are most relevant to what was
+  actually asked. The honest upgrade path here, if that becomes a real
+  problem, is embeddings-based retrieval (understanding meaning, not
+  just matching words, and not gated by a shared token-per-minute
+  budget) — a real project on its own, not a small tweak.
+- The system prompt instructs the model to lead with what's in the
+  course materials and say plainly when something isn't covered, rather
+  than silently guessing — but it's also allowed to fall back to general
+  knowledge when asked, as long as it's clear about which is which. It's
+  a strong instruction, not a hard technical guarantee — treat answers
+  as a study aid, not an authoritative source, the same way you'd treat
+  any AI tool.
 - **Rate-limited** to 30 questions per hour per signed-in identity
   (`RATE_LIMIT_PER_HOUR` in `src/assistant.js`), tracked in memory. This
-  exists purely to stop one runaway account from generating a large
-  Anthropic API bill — it resets whenever the server restarts/redeploys,
-  and wouldn't coordinate correctly if you ever ran more than one server
+  guards against one person hammering the endpoint — it does **not**
+  protect against Groq's own shared limit being hit by many different
+  people at once (see the scaling note above; those are two different
+  ceilings). It resets whenever the server restarts/redeploys, and
+  wouldn't coordinate correctly if you ever ran more than one server
   instance. Both are fine at this app's scale.
 - Only signed-in users (Governor or a registered student) can use it —
-  unlike materials and outlines, this endpoint isn't public, specifically
-  because every question costs real money in API usage.
+  unlike materials and outlines, this endpoint isn't public.
 
 ## Local setup
 
