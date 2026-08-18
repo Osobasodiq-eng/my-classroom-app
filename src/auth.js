@@ -39,16 +39,19 @@ function requireGovernor(req, res, next) {
 // separate from anything the Governor sets, and lets the app tell one
 // student apart from another instead of trusting a free-pick name dropdown.
 async function studentSignup(req, res) {
-  const { matric, name, password } = req.body || {};
+  const { matric, name, email, password } = req.body || {};
   if (!matric || !String(matric).trim()) {
     return res.status(400).json({ error: 'Enter your matric number.' });
+  }
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email).trim())) {
+    return res.status(400).json({ error: 'Enter a valid email address.' });
   }
   if (!password || String(password).length < 4) {
     return res.status(400).json({ error: 'Choose a password of at least 4 characters.' });
   }
   try {
     const passwordHash = await bcrypt.hash(String(password), 10);
-    const result = await db.studentSignup(String(matric), String(name || '').trim(), passwordHash);
+    const result = await db.studentSignup(String(matric), String(name || '').trim(), String(email).trim(), passwordHash);
     if (!result.ok) return res.status(result.status).json({ error: result.error });
     const token = jwt.sign(
       { role: 'student', studentId: result.student.id },
@@ -81,8 +84,8 @@ async function studentLogin(req, res) {
     res.json({
       token,
       student: student
-        ? { id: student.id, name: student.name, roll: student.roll }
-        : { id: cred.student_id, name: '', roll: matric },
+        ? { id: student.id, name: student.name, roll: student.roll, email: student.email }
+        : { id: cred.student_id, name: '', roll: matric, email: '' },
     });
   } catch (err) {
     console.error(err);

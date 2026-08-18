@@ -171,6 +171,11 @@
   .chat-msg.assistant{ align-self:flex-start; background:rgba(201,166,103,0.09); border:1px solid var(--brass-dim); }
   .chat-msg.assistant.pending{ color:var(--chalk-faint); font-style:italic; }
   .chat-sources{ margin-top:8px; font-size:11px; color:var(--chalk-faint); font-family:'IBM Plex Mono', monospace; }
+  .chat-msg p{ margin:0 0 8px; }
+  .chat-msg p:last-child{ margin-bottom:0; }
+  .chat-msg ul, .chat-msg ol{ margin:2px 0 8px; padding-left:20px; }
+  .chat-msg li{ margin-bottom:2px; }
+  .chat-msg code{ background:rgba(0,0,0,0.25); padding:1px 5px; border-radius:4px; font-family:'IBM Plex Mono', monospace; font-size:12.5px; }
   .chat-input-row{ display:flex; gap:10px; margin-top:14px; align-items:flex-end; }
   .chat-input-row .field{ flex:1; margin:0; }
   .chat-input-row textarea{ resize:none; min-height:44px; max-height:120px; width:100%; }
@@ -254,6 +259,7 @@
   let assistantCourseId = null;
   let assistantMessages = []; // {role, content, sources?, pending?}
   let assistantBusy = false;
+  let assistantHistoryLoadedFor = null;
   let selectedLectureId = null;
   let attendanceCourseFilter = "";
   let materialsCourseFilter = "";
@@ -266,6 +272,10 @@
   let editingLectureId = null;
   let editingMaterialId = null;
   let editingCourseId = null;
+  let showArchivedCourses = false;
+  function studentArchiveKey(){ return "archivedCourses:" + (studentInfo ? studentInfo.id : "anon"); }
+  function getStudentArchivedCourses(){ try{ return new Set(JSON.parse(localStorage.getItem(studentArchiveKey())||"[]")); }catch(e){ return new Set(); } }
+  function setStudentArchivedCourses(set){ localStorage.setItem(studentArchiveKey(), JSON.stringify([...set])); }
   let pendingLecturers = [];
   let pendingLecturersFor = "__new__";
   let editingAssignmentId = null;
@@ -303,6 +313,9 @@
     setStudentSession(null, null);
     myIdentityId = null;
     role = "student";
+    assistantMessages = [];
+    assistantHistoryLoadedFor = null;
+    dashboardLastSeenSnapshot = null;
     render();
   }
 
@@ -386,6 +399,8 @@
     setAuthToken(null);
     role = "student";
     myIdentityId = null;
+    assistantMessages = [];
+    assistantHistoryLoadedFor = null;
     render();
   }
 
@@ -411,6 +426,7 @@
   }
 
   function courseOf(id){ return data.courses.find(c => c.id === id); }
+  function activeCourses(){ return data.courses.filter(c => !c.archived); }
   function courseColor(id){ const c = courseOf(id); return c ? c.color : "var(--chalk-faint)"; }
   function courseLectures(courseId){ return data.lectures.filter(l => l.courseId === courseId).sort((a,b)=> (a.date||"").localeCompare(b.date||"")); }
   function sessionNumber(lecture){ return courseLectures(lecture.courseId).findIndex(l => l.id === lecture.id) + 1; }
@@ -496,13 +512,14 @@
     doc.setFontSize(11); doc.setFont("helvetica","normal");
     doc.text((course ? course.name + " — " : "") + lec.title, 14, 26);
     doc.setFontSize(9.5); doc.setTextColor(90);
-    doc.text("Session " + sessionNumber(lec) + " · " + fmtDate(lec.date) + (lec.topic ? " · " + lec.topic : ""), 14, 32);
-    const rows = data.students.map(s => {
+    const presentStudents = data.students.filter(s => getRecord(lec.id, s.id).status === "present");
+    doc.text("Session " + sessionNumber(lec) + " · " + fmtDate(lec.date) + (lec.topic ? " · " + lec.topic : "") + " · " + presentStudents.length + " of " + data.students.length + " present", 14, 32);
+    const rows = presentStudents.map(s => {
       const rec = getRecord(lec.id, s.id);
-      return [s.roll, s.name, rec.status, rec.method || "—", rec.at ? fmtDateTime(rec.at) : "—"];
+      return [s.roll, s.name, rec.method || "—", rec.at ? fmtDateTime(rec.at) : "—"];
     });
     doc.autoTable({
-      startY: 38, head: [["Matric No.","Name","Status","Method","Signed at"]], body: rows,
+      startY: 38, head: [["Matric No.","Name","Method","Signed at"]], body: rows,
       styles:{fontSize:9}, headStyles:{fillColor:[36,64,47]}
     });
     doc.save("attendance_" + (lec.title||"session").replace(/\s+/g,"_") + ".pdf");
@@ -534,14 +551,32 @@
 
   // ---------- DASHBOARD ----------
 
+  function studentLastSeenKey(){ return "lastSeen:" + (studentInfo ? studentInfo.id : "anon"); }
+  function getStudentLastSeen(){ return localStorage.getItem(studentLastSeenKey()) || "1970-01-01"; }
+  function markStudentSeenNow(){ if(studentInfo) localStorage.setItem(studentLastSeenKey(), new Date().toISOString()); }
+  let dashboardLastSeenSnapshot = null; // captured once per session so the "new" badge doesn't disappear mid-visit
+
   function renderDashboard(){
     if(role === "student"){
+      if(dashboardLastSeenSnapshot === null){
+        dashboardLastSeenSnapshot = getStudentLastSeen().slice(0,10);
+        markStudentSeenNow();
+      }
+      const newAssignments = data.assignments.filter(a => (a.createdAt||"") > dashboardLastSeenSnapshot);
+      const newAnnouncements = data.announcements.filter(a => (a.date||"") > dashboardLastSeenSnapshot);
+      const newMaterials = data.materials.filter(m => (m.date||"") > dashboardLastSeenSnapshot);
+      const notifParts = [];
+      if(newAnnouncements.length) notifParts.push(newAnnouncements.length + " new announcement" + (newAnnouncements.length===1?"":"s"));
+      if(newAssignments.length) notifParts.push(newAssignments.length + " new assignment" + (newAssignments.length===1?"":"s"));
+      if(newMaterials.length) notifParts.push(newMaterials.length + " new material" + (newMaterials.length===1?"":"s"));
+
       const me = studentInfo ? data.students.find(s => s.id === studentInfo.id) : null;
       const st = me ? studentStats(me.id) : {present:0, total:0, pct:null};
       const pctLabel = st.pct === null ? "—" : st.pct + "%";
       const upcomingAssignments = [...data.assignments].filter(a => !a.dueDate || a.dueDate >= new Date().toISOString().slice(0,10)).sort((a,b)=>(a.dueDate||"").localeCompare(b.dueDate||"")).slice(0,3);
       const recentAnnouncements = [...data.announcements].sort((a,b)=> (b.pinned - a.pinned) || (b.date||"").localeCompare(a.date||"")).slice(0,2);
       return (
+        (notifParts.length ? '<div class="panel" style="border:1px solid var(--brass);"><h2 style="font-size:15px;">🔔 New since your last visit</h2><p class="hint" style="margin-top:4px;">' + notifParts.join(" · ") + '</p></div>' : '') +
         '<div class="panel"><h2>' + escapeHtml(data.className) + '</h2>' +
         '<p class="hint">' + (me ? 'Welcome back, ' + escapeHtml(me.name) + '.' : 'Welcome.') + '</p>' +
         '<div class="stat-row">' +
@@ -627,7 +662,7 @@
       '<p class="hint">' + (editingLecture ? "Update the session details below." : "Add a session before taking attendance for it.") + '</p>' +
       '<form id="lectureForm"><input type="hidden" name="id" value="' + (editingLecture ? editingLecture.id : "") + '" />' +
       '<div class="form-row">' +
-        '<div class="field"><label>Course</label><select required name="courseId" id="lectureCourseSelect">' + data.courses.map(c => '<option value="' + c.id + '" ' + (editingLecture && editingLecture.courseId===c.id?'selected':'') + '>' + escapeHtml(c.name) + '</option>').join("") + '</select></div>' +
+        '<div class="field"><label>Course</label><select required name="courseId" id="lectureCourseSelect">' + activeCourses().map(c => '<option value="' + c.id + '" ' + (editingLecture && editingLecture.courseId===c.id?'selected':'') + '>' + escapeHtml(c.name) + '</option>').join("") + '</select></div>' +
         '<div class="field"><label>Lecturer</label><select name="lecturerId" id="lectureLecturerSelect"></select></div>' +
       '</div>' +
       '<div class="form-row">' +
@@ -727,7 +762,7 @@
       '<div class="form-row">' +
         '<div class="field" style="flex:2;"><label>Title</label><input required name="title" value="' + (editingMaterial?escapeAttr(editingMaterial.title):"") + '" placeholder="e.g. HBR — Managing Oneself" /></div>' +
         '<div class="field" style="max-width:150px;"><label>Type</label><select name="type">' + ["Case Study","Article","Slide Deck","Book Chapter","Video","Other"].map(t => '<option ' + (editingMaterial && editingMaterial.type===t?'selected':'') + '>' + t + '</option>').join("") + '</select></div>' +
-        '<div class="field"><label>Course</label><select name="courseId" id="materialCourseSelect"><option value="">General</option>' + data.courses.map(c => '<option value="' + c.id + '" ' + (editingMaterial && editingMaterial.courseId===c.id?'selected':'') + '>' + escapeHtml(c.name) + '</option>').join("") + '</select></div>' +
+        '<div class="field"><label>Course</label><select name="courseId" id="materialCourseSelect"><option value="">General</option>' + activeCourses().map(c => '<option value="' + c.id + '" ' + (editingMaterial && editingMaterial.courseId===c.id?'selected':'') + '>' + escapeHtml(c.name) + '</option>').join("") + '</select></div>' +
       '</div>' +
       '<div class="form-row">' +
         '<div class="field"><label>Linked lecture</label><select name="lectureId" id="materialLectureSelect">' + lecOptionsFor(editingMaterial ? editingMaterial.courseId : "") + '</select></div>' +
@@ -783,11 +818,14 @@
       '<form id="assignmentForm"><input type="hidden" name="id" value="' + (editingAssignment ? editingAssignment.id : "") + '" />' +
       '<div class="form-row">' +
         '<div class="field" style="flex:2;"><label>Title</label><input required name="title" value="' + (editingAssignment?escapeAttr(editingAssignment.title):"") + '" placeholder="e.g. Case write-up" /></div>' +
-        '<div class="field"><label>Course</label><select required name="courseId">' + data.courses.map(c => '<option value="' + c.id + '" ' + (editingAssignment && editingAssignment.courseId===c.id?'selected':'') + '>' + escapeHtml(c.name) + '</option>').join("") + '</select></div>' +
+        '<div class="field"><label>Course</label><select required name="courseId">' + activeCourses().map(c => '<option value="' + c.id + '" ' + (editingAssignment && editingAssignment.courseId===c.id?'selected':'') + '>' + escapeHtml(c.name) + '</option>').join("") + '</select></div>' +
         '<div class="field" style="max-width:170px;"><label>Due date</label><input required type="date" name="dueDate" value="' + (editingAssignment?editingAssignment.dueDate:"") + '" /></div>' +
       '</div>' +
       '<div class="form-row"><div class="field"><label>Description</label><textarea name="description" placeholder="Instructions, requirements, rubric...">' + (editingAssignment?escapeHtml(editingAssignment.description||""):"") + '</textarea></div></div>' +
-      '<div class="form-row"><div class="field"><label>Link (optional)</label><input type="url" name="link" value="' + (editingAssignment?escapeAttr(editingAssignment.link||""):"") + '" placeholder="https://... (submission portal, brief doc)" /></div></div>' +
+      '<div class="form-row">' +
+        '<div class="field"><label>Attach a file (any type, optional)</label><input type="file" name="file" id="assignmentFileInput" />' + (editingAssignment && editingAssignment.fileId ? '<p class="hint" style="margin-top:6px;">Currently attached: <a href="/api/files/' + escapeAttr(editingAssignment.fileId) + '" target="_blank" rel="noopener">' + escapeHtml(editingAssignment.fileName||"file") + '</a> — choosing a new file replaces it.</p>' : '') + '</div>' +
+        '<div class="field"><label>Link (optional)</label><input type="url" name="link" value="' + (editingAssignment?escapeAttr(editingAssignment.link||""):"") + '" placeholder="https://... (submission portal, brief doc)" /></div>' +
+      '</div>' +
       '<div class="form-row" style="gap:8px;"><button class="btn" type="submit">' + (editingAssignment ? "Save changes" : "Post assignment") + '</button>' + (editingAssignment ? '<button class="btn ghost" type="button" id="cancelAssignmentEdit">Cancel</button>' : '') + '</div>' +
       '</form></div>'
     ) : "";
@@ -803,6 +841,7 @@
       return '<div class="assignment-card"><h3>' + (overdue ? '<span class="overdue-badge">Overdue</span>' : '') + escapeHtml(a.title) + '</h3>' +
         '<div class="assignment-meta">' + (course ? escapeHtml(course.name) + " · " : "") + 'Due ' + fmtDate(a.dueDate) + '</div>' +
         (a.description ? '<div class="assignment-body">' + escapeHtml(a.description) + '</div>' : '') +
+        (a.fileId ? '<div style="margin-top:6px;"><a href="/api/files/' + escapeAttr(a.fileId) + '" target="_blank" rel="noopener" style="color:var(--brass); font-size:13px;">Download ' + escapeHtml(a.fileName||"attachment") + ' →</a></div>' : '') +
         (a.link ? '<div style="margin-top:6px;"><a href="' + escapeAttr(a.link) + '" target="_blank" rel="noopener" style="color:var(--brass); font-size:13px;">Open link →</a></div>' : '') +
         (role === "governor" ? '<div class="list-actions" style="margin-top:8px;"><button class="btn small ghost" data-edit-assignment="' + a.id + '">Edit</button><button class="btn small danger" data-delete-assignment="' + a.id + '">Remove</button></div>' : '') +
       '</div>';
@@ -824,6 +863,7 @@
       '<form id="announceForm">' +
       '<div class="form-row"><div class="field"><label>Title</label><input required name="title" placeholder="e.g. Session moved to Room 4B" /></div></div>' +
       '<div class="form-row"><div class="field"><label>Message</label><textarea required name="body" placeholder="Details for the class..."></textarea></div></div>' +
+      '<div class="form-row"><div class="field"><label>Attach a file (any type, optional)</label><input type="file" name="file" id="announceFileInput" /></div></div>' +
       '<div class="form-row" style="align-items:center;"><label style="display:flex; align-items:center; gap:6px; font-size:13px; color:var(--chalk-dim);"><input type="checkbox" name="pinned" style="width:auto;" /> Pin to top</label></div>' +
       '<button class="btn" type="submit">Post</button></form></div>'
     ) : "";
@@ -831,6 +871,7 @@
     const items = [...data.announcements].sort((a,b) => (b.pinned - a.pinned) || (b.date||"").localeCompare(a.date||""));
     const list = items.map(a => '<div class="announce-card"><h3>' + (a.pinned ? '<span class="pin">Pinned</span>' : '') + escapeHtml(a.title) + '</h3>' +
       '<div class="announce-meta">' + fmtDate(a.date) + '</div><div class="announce-body">' + escapeHtml(a.body) + '</div>' +
+      (a.fileId ? '<div style="margin-top:6px;"><a href="/api/files/' + escapeAttr(a.fileId) + '" target="_blank" rel="noopener" style="color:var(--brass); font-size:13px;">Download ' + escapeHtml(a.fileName||"attachment") + ' →</a></div>' : '') +
       (role === "governor" ? '<div class="list-actions" style="margin-top:8px;"><button class="btn small ghost" data-toggle-pin="' + a.id + '">' + (a.pinned ? "Unpin" : "Pin") + '</button><button class="btn small danger" data-delete-announce="' + a.id + '">Remove</button></div>' : '') +
       '</div>').join("");
 
@@ -878,12 +919,31 @@
       '</form></div>'
     ) : "";
 
-    const cards = data.courses.map(c => {
+    const studentArchived = role === "student" ? getStudentArchivedCourses() : new Set();
+    const isHiddenForViewer = (c) => role === "governor" ? !!c.archived : (!!c.archived || studentArchived.has(c.id));
+    const visibleList = data.courses.filter(c => showArchivedCourses ? true : !isHiddenForViewer(c));
+    const archivedCount = data.courses.filter(isHiddenForViewer).length;
+
+    const cards = visibleList.map(c => {
       const lecCount = data.lectures.filter(l => l.courseId === c.id).length;
       const matCount = data.materials.filter(m => m.courseId === c.id).length;
       const lecturerNames = (c.lecturers||[]).map(l => l.name).join(", ") || "No lecturers added";
-      return '<div class="course-card">' +
-        (role==="governor" ? '<div class="cactions"><button class="btn small ghost" data-edit-course="' + c.id + '">Edit</button><button class="btn small danger" data-delete-course="' + c.id + '">✕</button></div>' : '') +
+      const hidden = isHiddenForViewer(c);
+      let actions;
+      if(role === "governor"){
+        actions = '<div class="cactions"><button class="btn small ghost" data-edit-course="' + c.id + '">Edit</button>' +
+          (c.archived ? '<button class="btn small ghost" data-unarchive-course="' + c.id + '">Unarchive</button>' : '<button class="btn small ghost" data-archive-course="' + c.id + '">Archive</button>') +
+          '<button class="btn small danger" data-delete-course="' + c.id + '">✕</button></div>';
+      } else if(c.archived){
+        actions = '<div class="cactions"><span class="hint">Archived by Governor</span></div>';
+      } else if(studentArchived.has(c.id)){
+        actions = '<div class="cactions"><button class="btn small ghost" data-student-unarchive-course="' + c.id + '">Unarchive</button></div>';
+      } else {
+        actions = '<div class="cactions"><button class="btn small ghost" data-student-archive-course="' + c.id + '">Archive</button></div>';
+      }
+      return '<div class="course-card"' + (hidden ? ' style="opacity:0.6;"' : '') + '>' +
+        actions +
+        (hidden ? '<span class="risk-badge" style="margin-bottom:4px;">Archived</span>' : '') +
         '<h3><span class="course-dot" style="background:' + c.color + '"></span>' + escapeHtml(c.name) + '</h3>' +
         '<div class="ccode">' + escapeHtml(c.code||"—") + '</div>' +
         '<div class="lecturers">' + escapeHtml(lecturerNames) + '</div>' +
@@ -892,8 +952,12 @@
       '</div>';
     }).join("");
 
-    return addForm + '<div class="panel"><h2>Courses</h2><p class="hint">' + data.courses.length + ' course' + (data.courses.length===1?'':'s') + ' this term. Open a course to manage its lecturers and outline.</p>' +
-      (data.courses.length === 0 ? '<div class="empty">No courses yet. Add one above.</div>' : '<div class="course-grid">' + cards + '</div>') + '</div>';
+    return addForm + '<div class="panel"><h2>Courses</h2>' +
+      '<div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">' +
+        '<p class="hint">' + visibleList.length + ' course' + (visibleList.length===1?'':'s') + ' shown' + (archivedCount ? ' · ' + archivedCount + ' archived' : '') + '. Open a course to manage its lecturers and outline.</p>' +
+        (archivedCount ? '<button class="btn ghost small" type="button" id="toggleArchivedCourses">' + (showArchivedCourses ? "Hide archived" : "Show archived (" + archivedCount + ")") + '</button>' : '') +
+      '</div>' +
+      (visibleList.length === 0 ? '<div class="empty">No courses to show.</div>' : '<div class="course-grid">' + cards + '</div>') + '</div>';
   }
 
   function renderCourseDrawer(){
@@ -1017,11 +1081,47 @@
 
   // ---------- AI STUDY ASSISTANT ----------
 
-  function renderAssistant(){
-    if(data.courses.length === 0){
-      return '<div class="panel"><h2>Ask AI</h2><div class="empty">Add a course first — the assistant answers questions grounded in a specific course\'s outline and materials.</div></div>';
+  // Escapes first, then applies a small set of safe markdown conversions —
+  // enough to make an LLM's typical **bold**/bullet/numbered output read
+  // properly without pulling in a full markdown library.
+  function formatAssistantMessage(text){
+    const lines = escapeHtml(text).split("\n");
+    let html = ""; let inUl = false; let inOl = false;
+    function closeLists(){ if(inUl){ html += "</ul>"; inUl = false; } if(inOl){ html += "</ol>"; inOl = false; } }
+    for(const raw of lines){
+      const line = raw.trim();
+      const ulMatch = line.match(/^[-*]\s+(.*)/);
+      const olMatch = line.match(/^\d+\.\s+(.*)/);
+      if(ulMatch){
+        if(inOl){ html += "</ol>"; inOl = false; }
+        if(!inUl){ html += "<ul>"; inUl = true; }
+        html += "<li>" + inlineFormat(ulMatch[1]) + "</li>";
+      } else if(olMatch){
+        if(inUl){ html += "</ul>"; inUl = false; }
+        if(!inOl){ html += "<ol>"; inOl = true; }
+        html += "<li>" + inlineFormat(olMatch[1]) + "</li>";
+      } else if(line === ""){
+        closeLists(); html += "<br>";
+      } else {
+        closeLists(); html += "<p>" + inlineFormat(line) + "</p>";
+      }
     }
-    if(!assistantCourseId || !courseOf(assistantCourseId)) assistantCourseId = data.courses[0].id;
+    closeLists();
+    return html;
+  }
+  function inlineFormat(s){
+    return s
+      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+      .replace(/`(.+?)`/g, "<code>$1</code>")
+      .replace(/(^|[^*])\*([^*]+?)\*(?!\*)/g, "$1<em>$2</em>");
+  }
+
+  function renderAssistant(){
+    const availableCourses = activeCourses();
+    if(availableCourses.length === 0){
+      return '<div class="panel"><h2>Ask AI</h2><div class="empty">Add an active course first — the assistant answers questions grounded in a specific course\'s outline and materials.</div></div>';
+    }
+    if(!assistantCourseId || !availableCourses.find(c => c.id === assistantCourseId)) assistantCourseId = availableCourses[0].id;
     const course = courseOf(assistantCourseId);
     const materialCount = data.materials.filter(m => m.courseId === assistantCourseId).length;
 
@@ -1029,7 +1129,7 @@
       '<div class="card-title-row" style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">' +
         '<div><h2 style="margin:0;">Ask AI</h2><p class="hint" style="margin-top:2px;">Prioritizes this course\'s outline and materials, and says clearly when it\'s falling back to general knowledge.</p></div>' +
         '<div style="display:flex; gap:8px; align-items:center;">' +
-          '<select id="assistantCourseSelect">' + data.courses.map(c => '<option value="' + c.id + '" ' + (c.id===assistantCourseId?'selected':'') + '>' + escapeHtml(c.name) + '</option>').join("") + '</select>' +
+          '<select id="assistantCourseSelect">' + availableCourses.map(c => '<option value="' + c.id + '" ' + (c.id===assistantCourseId?'selected':'') + '>' + escapeHtml(c.name) + '</option>').join("") + '</select>' +
           '<button class="btn ghost small" type="button" id="assistantNewChat">New chat</button>' +
         '</div>' +
       '</div>' +
@@ -1040,7 +1140,8 @@
         (assistantMessages.length === 0
           ? '<div class="chat-empty">Ask something like "what does the outline cover in week 3?" or "summarize the reading on X."</div>'
           : assistantMessages.map(m =>
-              '<div class="chat-msg ' + m.role + (m.pending ? ' pending' : '') + '">' + escapeHtml(m.content) +
+              '<div class="chat-msg ' + m.role + (m.pending ? ' pending' : '') + '">' +
+              (m.role === "assistant" ? formatAssistantMessage(m.content) : escapeHtml(m.content)) +
               (m.sources && m.sources.length ? '<div class="chat-sources">Grounded in: ' + m.sources.map(escapeHtml).join(" · ") + '</div>' : '') +
               '</div>'
             ).join("")
@@ -1053,18 +1154,51 @@
       '</div>';
   }
 
+  async function loadAssistantHistory(){
+    const token = role === "governor" ? authToken : studentToken;
+    if(!token) return;
+    try{
+      const res = await fetch("/api/assistant/history?courseId=" + encodeURIComponent(assistantCourseId), {
+        headers: {"Authorization":"Bearer " + token},
+      });
+      if(!res.ok) return;
+      const json = await res.json();
+      assistantMessages = json.messages || [];
+      assistantHistoryLoadedFor = assistantCourseId;
+      render();
+    }catch(err){ /* silently keep whatever's already shown */ }
+  }
+
   function attachAssistantEvents(){
     const chatWindow = document.getElementById("chatWindow");
     if(chatWindow) chatWindow.scrollTop = chatWindow.scrollHeight;
+
+    if(assistantHistoryLoadedFor !== assistantCourseId){
+      loadAssistantHistory();
+    }
 
     const courseSelect = document.getElementById("assistantCourseSelect");
     if(courseSelect) courseSelect.addEventListener("change", () => {
       assistantCourseId = courseSelect.value;
       assistantMessages = [];
+      assistantHistoryLoadedFor = null;
       render();
     });
     const newChatBtn = document.getElementById("assistantNewChat");
-    if(newChatBtn) newChatBtn.addEventListener("click", () => { assistantMessages = []; render(); });
+    if(newChatBtn) newChatBtn.addEventListener("click", async () => {
+      const token = role === "governor" ? authToken : studentToken;
+      assistantMessages = [];
+      render();
+      if(token){
+        try{
+          await fetch("/api/assistant/history/clear", {
+            method: "POST",
+            headers: {"Content-Type":"application/json", "Authorization":"Bearer " + token},
+            body: JSON.stringify({courseId: assistantCourseId}),
+          });
+        }catch(err){ /* local view already cleared; will resync next load */ }
+      }
+    });
 
     const form = document.getElementById("assistantForm");
     if(form){
@@ -1085,16 +1219,17 @@
         render();
 
         try{
-          const history = assistantMessages.filter(m => !m.pending).map(m => ({role:m.role, content:m.content}));
           const res = await fetch("/api/assistant/ask", {
             method: "POST",
             headers: {"Content-Type":"application/json", "Authorization":"Bearer " + token},
-            body: JSON.stringify({courseId: assistantCourseId, messages: history}),
+            body: JSON.stringify({courseId: assistantCourseId, question}),
           });
           const json = await res.json();
           assistantMessages.pop(); // remove the pending placeholder
           if(!res.ok){
             assistantMessages.push({role:"assistant", content: json.error || "Something went wrong."});
+          } else if(json.history){
+            assistantMessages = json.history; // server is authoritative — replaces local guess with what's actually saved
           } else {
             assistantMessages.push({role:"assistant", content: json.reply, sources: json.sources});
           }
@@ -1130,7 +1265,7 @@
         : "Sign in with your matric number and password to see your attendance and check in to class.") + '</p>' +
       '<form id="studentAuthForm">' +
         '<div class="field"><label>Matric number</label><input required type="text" name="matric" autofocus autocapitalize="characters" /></div>' +
-        (isSignup ? '<div class="field"><label>Full name</label><input required type="text" name="name" /></div>' : '') +
+        (isSignup ? '<div class="field"><label>Full name</label><input required type="text" name="name" /></div><div class="field"><label>Email address</label><input required type="email" name="email" /></div>' : '') +
         '<div class="field"><label>Password</label><input required type="password" name="password" minlength="4" /></div>' +
         (studentAuthError ? '<p class="hint" style="color:var(--rose); margin-bottom:10px;">' + escapeHtml(studentAuthError) + '</p>' : '') +
         '<button class="btn" type="submit" style="width:100%;">' + (isSignup ? "Sign up" : "Sign in") + '</button>' +
@@ -1147,7 +1282,7 @@
     const password = fd.get("password");
     const isSignup = studentAuthMode === "signup";
     const url = isSignup ? "/api/auth/student-signup" : "/api/auth/student-login";
-    const body = isSignup ? { matric, name: fd.get("name"), password } : { matric, password };
+    const body = isSignup ? { matric, name: fd.get("name"), email: fd.get("email"), password } : { matric, password };
     try{
       const res = await fetch(url, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
       const json = await res.json();
@@ -1215,7 +1350,7 @@
         '<p class="sub" style="margin-bottom:10px;">' + (isSignup ? "Create an account to check in:" : "Sign in to check in:") + '</p>' +
         '<form id="kioskAuthForm">' +
           '<input required type="text" name="matric" placeholder="Matric number" autocapitalize="characters" style="margin-bottom:10px;" />' +
-          (isSignup ? '<input required type="text" name="name" placeholder="Full name" style="margin-bottom:10px;" />' : '') +
+          (isSignup ? '<input required type="text" name="name" placeholder="Full name" style="margin-bottom:10px;" /><input required type="email" name="email" placeholder="Email address" style="margin-bottom:10px;" />' : '') +
           '<input required type="password" name="password" placeholder="Password" minlength="4" style="margin-bottom:10px;" />' +
           (studentAuthError ? '<p class="sub" style="color:var(--rose); margin-bottom:10px;">' + escapeHtml(studentAuthError) + '</p>' : '') +
           '<button class="btn" type="submit">' + (isSignup ? "Sign up & check in" : "Sign in & check in") + '</button>' +
@@ -1541,8 +1676,24 @@
         e.preventDefault();
         const fd = new FormData(assignmentForm);
         const id = fd.get("id");
+        const existing = id ? data.assignments.find(a => a.id === id) : null;
+        const submitBtn = assignmentForm.querySelector('button[type="submit"]');
         const payload = {courseId: fd.get("courseId"), title: fd.get("title").trim(), description: fd.get("description").trim(), dueDate: fd.get("dueDate"), link: fd.get("link").trim()};
-        if(id){ Object.assign(data.assignments.find(a => a.id === id), payload); editingAssignmentId = null; }
+        const chosenFile = document.getElementById("assignmentFileInput").files[0];
+        if(chosenFile){
+          submitBtn.disabled = true; submitBtn.textContent = "Uploading…";
+          try{
+            const uploaded = await uploadFile(chosenFile);
+            payload.fileId = uploaded.id; payload.fileName = uploaded.filename;
+          }catch(err){
+            alert(err.message || "Could not upload the file.");
+            submitBtn.disabled = false; submitBtn.textContent = id ? "Save changes" : "Post assignment";
+            return;
+          }
+        } else if(existing){
+          payload.fileId = existing.fileId; payload.fileName = existing.fileName;
+        }
+        if(id){ Object.assign(existing, payload); editingAssignmentId = null; }
         else { data.assignments.push(Object.assign({id: uid(), createdAt: new Date().toISOString().slice(0,10)}, payload)); }
         await saveData(); render();
       });
@@ -1560,7 +1711,21 @@
       announceForm.addEventListener("submit", async (e) => {
         e.preventDefault();
         const fd = new FormData(announceForm);
-        data.announcements.push({id: uid(), title: fd.get("title").trim(), body: fd.get("body").trim(), pinned: !!fd.get("pinned"), date: new Date().toISOString().slice(0,10)});
+        const submitBtn = announceForm.querySelector('button[type="submit"]');
+        const payload = {id: uid(), title: fd.get("title").trim(), body: fd.get("body").trim(), pinned: !!fd.get("pinned"), date: new Date().toISOString().slice(0,10)};
+        const chosenFile = document.getElementById("announceFileInput").files[0];
+        if(chosenFile){
+          submitBtn.disabled = true; submitBtn.textContent = "Uploading…";
+          try{
+            const uploaded = await uploadFile(chosenFile);
+            payload.fileId = uploaded.id; payload.fileName = uploaded.filename;
+          }catch(err){
+            alert(err.message || "Could not upload the file.");
+            submitBtn.disabled = false; submitBtn.textContent = "Post";
+            return;
+          }
+        }
+        data.announcements.push(payload);
         await saveData(); render();
       });
     }
@@ -1643,6 +1808,22 @@
       await saveData(); render();
     }));
     document.querySelectorAll("[data-open-course]").forEach(btn => btn.addEventListener("click", () => { drawerCourseId = btn.getAttribute("data-open-course"); render(); }));
+    document.querySelectorAll("[data-archive-course]").forEach(btn => btn.addEventListener("click", async () => {
+      const c = courseOf(btn.getAttribute("data-archive-course"));
+      if(c){ c.archived = true; await saveData(); render(); }
+    }));
+    document.querySelectorAll("[data-unarchive-course]").forEach(btn => btn.addEventListener("click", async () => {
+      const c = courseOf(btn.getAttribute("data-unarchive-course"));
+      if(c){ c.archived = false; await saveData(); render(); }
+    }));
+    document.querySelectorAll("[data-student-archive-course]").forEach(btn => btn.addEventListener("click", () => {
+      const set = getStudentArchivedCourses(); set.add(btn.getAttribute("data-student-archive-course")); setStudentArchivedCourses(set); render();
+    }));
+    document.querySelectorAll("[data-student-unarchive-course]").forEach(btn => btn.addEventListener("click", () => {
+      const set = getStudentArchivedCourses(); set.delete(btn.getAttribute("data-student-unarchive-course")); setStudentArchivedCourses(set); render();
+    }));
+    const toggleArchivedCourses = document.getElementById("toggleArchivedCourses");
+    if(toggleArchivedCourses) toggleArchivedCourses.addEventListener("click", () => { showArchivedCourses = !showArchivedCourses; render(); });
 
     // Course drawer
     const closeCourseDrawer = document.getElementById("closeCourseDrawer");
@@ -1703,7 +1884,10 @@
       studentForm.addEventListener("submit", async (e) => {
         e.preventDefault();
         const fd = new FormData(studentForm);
-        data.students.push({id: uid(), roll: fd.get("roll").trim(), name: fd.get("name").trim(), email: fd.get("email").trim()});
+        const roll = fd.get("roll").trim();
+        const dup = data.students.find(s => (s.roll||"").trim().toUpperCase() === roll.toUpperCase());
+        if(dup){ alert("A student with matric number " + roll + " is already on the roll (" + dup.name + ")."); return; }
+        data.students.push({id: uid(), roll, name: fd.get("name").trim(), email: fd.get("email").trim()});
         await saveData(); render();
       });
     }

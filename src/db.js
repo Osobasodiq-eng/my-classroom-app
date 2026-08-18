@@ -62,6 +62,18 @@ async function init() {
   // IF NOT EXISTS makes this safe to run again on every boot.
   await pool.query(`ALTER TABLE files ADD COLUMN IF NOT EXISTS extracted_text TEXT;`);
   await pool.query(`ALTER TABLE files ADD COLUMN IF NOT EXISTS extraction_done BOOLEAN NOT NULL DEFAULT false;`);
+  // Kept separate from app_state for the same reason credentials and
+  // files are: a Governor's whole-document save shouldn't be able to
+  // wipe out a student's saved chat history, and this way it can't.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS assistant_chats (
+      identity TEXT NOT NULL,
+      course_id TEXT NOT NULL,
+      messages JSONB NOT NULL DEFAULT '[]',
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (identity, course_id)
+    );
+  `);
   const { rows } = await pool.query('SELECT id FROM app_state WHERE id = 1');
   if (rows.length === 0) {
     await pool.query(
@@ -171,7 +183,7 @@ async function signInAttendance(code, studentId) {
 // row instead of creating a duplicate. If it doesn't exist yet, a new
 // roster entry is created — this is what makes signup "auto-register" the
 // student, as requested.
-async function studentSignup(matricRaw, name, passwordHash) {
+async function studentSignup(matricRaw, name, email, passwordHash) {
   const matric = matricRaw.trim().toUpperCase();
   const client = await pool.connect();
   try {
@@ -190,12 +202,13 @@ async function studentSignup(matricRaw, name, passwordHash) {
     );
     if (student) {
       if (name) student.name = name;
+      if (email) student.email = email;
     } else {
       student = {
         id: 'stu-' + crypto.randomBytes(6).toString('hex'),
         roll: matricRaw.trim(),
         name: name || matricRaw.trim(),
-        email: '',
+        email: email || '',
       };
       if (!data.students) data.students = [];
       data.students.push(student);
@@ -212,7 +225,7 @@ async function studentSignup(matricRaw, name, passwordHash) {
     await client.query('COMMIT');
     return {
       ok: true,
-      student: { id: student.id, name: student.name, roll: student.roll },
+      student: { id: student.id, name: student.name, roll: student.roll, email: student.email },
       version: version + 1,
     };
   } catch (err) {
@@ -349,4 +362,30 @@ async function getFileText(id) {
   return text;
 }
 
-module.exports = { pool, init, getState, setState, signInAttendance, studentSignup, studentCredential, findStudentById, resetStudentPassword, saveFile, getFile, getFileText, finalizeExpiredSessions, DEFAULT_DATA };
+const MAX_SAVED_MESSAGES = 40;
+
+async function getChatHistory(identity, courseId) {
+  const { rows } = await pool.query(
+    'SELECT messages FROM assistant_chats WHERE identity = $1 AND course_id = $2',
+    [identity, courseId]
+  );
+  return rows.length ? rows[0].messages : [];
+}
+
+async function saveChatHistory(identity, courseId, messages) {
+  const trimmed = messages.slice(-MAX_SAVED_MESSAGES);
+  await pool.query(
+    `INSERT INTO assistant_chats (identity, course_id, messages, updated_at)
+     VALUES ($1, $2, $3, now())
+     ON CONFLICT (identity, course_id)
+     DO UPDATE SET messages = $3, updated_at = now()`,
+    [identity, courseId, JSON.stringify(trimmed)]
+  );
+  return trimmed;
+}
+
+async function clearChatHistory(identity, courseId) {
+  await pool.query('DELETE FROM assistant_chats WHERE identity = $1 AND course_id = $2', [identity, courseId]);
+}
+
+module.exports = { pool, init, getState, setState, signInAttendance, studentSignup, studentCredential, findStudentById, resetStudentPassword, saveFile, getFile, getFileText, finalizeExpiredSessions, getChatHistory, saveChatHistory, clearChatHistory, DEFAULT_DATA };

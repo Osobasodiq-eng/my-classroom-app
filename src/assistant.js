@@ -112,8 +112,8 @@ async function askAssistant(req, res) {
     return res.status(500).json({ error: 'The study assistant is not configured yet — GROQ_API_KEY is missing on the server.' });
   }
 
-  const { courseId, messages } = req.body || {};
-  if (!courseId || !Array.isArray(messages) || messages.length === 0) {
+  const { courseId, question } = req.body || {};
+  if (!courseId || typeof question !== 'string' || !question.trim()) {
     return res.status(400).json({ error: 'Pick a course and ask a question.' });
   }
 
@@ -128,20 +128,22 @@ async function askAssistant(req, res) {
     if (!course) return res.status(404).json({ error: 'Course not found.' });
     const materials = (data.materials || []).filter((m) => m.courseId === courseId);
 
+    const savedHistory = await db.getChatHistory(identity, courseId);
+    const userMessage = { role: 'user', content: question.trim().slice(0, MAX_MESSAGE_CHARS) };
+    const historyWithQuestion = [...savedHistory, userMessage];
+
     const { coreSections, materialSections } = await buildCourseContext({ course, materials });
     if (coreSections.length === 0 && materialSections.length === 0) {
-      return res.json({
-        reply: "There's nothing uploaded for " + course.name + " yet — no outline text or readable material files. Ask your Governor to add some, then try again.",
-        sources: [],
-      });
+      const reply = "There's nothing uploaded for " + course.name + " yet — no outline text or readable material files. Ask your Governor to add some, then try again.";
+      const updated = await db.saveChatHistory(identity, courseId, [...historyWithQuestion, { role: 'assistant', content: reply, sources: [] }]);
+      return res.json({ reply, sources: [], history: updated });
     }
 
     // Rank materials by relevance to the actual question asked, so with a
     // large reading list — or, on this provider, a small context budget —
     // the ones that matter to *this* question are what survives, not just
     // whichever were added first.
-    const latestQuestion = [...messages].reverse().find((m) => m && m.role === 'user' && typeof m.content === 'string');
-    const keywords = latestQuestion ? extractKeywords(latestQuestion.content) : [];
+    const keywords = extractKeywords(question);
     const rankedMaterials = keywords.length
       ? [...materialSections].sort((a, b) => scoreRelevance(b, keywords) - scoreRelevance(a, keywords))
       : materialSections;
@@ -157,17 +159,14 @@ async function askAssistant(req, res) {
       "excerpts don't cover what's asked, or only partly cover it, you may use your own general knowledge to fill the gap — " +
       'but clearly say when you\'re doing that (e.g. "This isn\'t covered in your course materials, but generally speaking...") ' +
       "so the student knows what came from their course versus general knowledge. Don't blend the two without flagging it. " +
-      'Keep answers concise.\n\n' +
+      'Format your answer with markdown where it helps readability — **bold** for key terms, bullet or numbered lists for ' +
+      'multi-part answers, short paragraphs. Keep answers concise.\n\n' +
       '--- COURSE MATERIALS ---\n' + contextBlock + '\n--- END COURSE MATERIALS ---';
 
-    const trimmedMessages = messages
+    const trimmedMessages = historyWithQuestion
       .slice(-MAX_MESSAGES)
       .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
       .map((m) => ({ role: m.role, content: m.content.slice(0, MAX_MESSAGE_CHARS) }));
-
-    if (trimmedMessages.length === 0 || trimmedMessages[trimmedMessages.length - 1].role !== 'user') {
-      return res.status(400).json({ error: 'Ask a question to get a response.' });
-    }
 
     // Groq is OpenAI-compatible: the system prompt is just the first
     // message in the array (role "system"), not a separate top-level
@@ -200,13 +199,41 @@ async function askAssistant(req, res) {
     }
 
     const json = await apiRes.json();
-    const reply = ((json.choices || [])[0] && json.choices[0].message && json.choices[0].message.content || '').trim();
+    const reply = ((json.choices || [])[0] && json.choices[0].message && json.choices[0].message.content || '').trim() || "I couldn't come up with an answer — try rephrasing your question.";
+    const sources = included.map((s) => s.label);
 
-    res.json({ reply: reply || "I couldn't come up with an answer — try rephrasing your question.", sources: included.map((s) => s.label) });
+    const updated = await db.saveChatHistory(identity, courseId, [...historyWithQuestion, { role: 'assistant', content: reply, sources }]);
+    res.json({ reply, sources, history: updated });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Could not reach the study assistant — try again.' });
   }
 }
 
-module.exports = { askAssistant };
+async function getHistory(req, res) {
+  const { courseId } = req.query || {};
+  if (!courseId) return res.status(400).json({ error: 'courseId is required.' });
+  const identity = req.auth.role === 'governor' ? 'governor' : 'student:' + req.auth.studentId;
+  try {
+    const messages = await db.getChatHistory(identity, courseId);
+    res.json({ messages });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Could not load chat history.' });
+  }
+}
+
+async function clearHistory(req, res) {
+  const { courseId } = req.body || {};
+  if (!courseId) return res.status(400).json({ error: 'courseId is required.' });
+  const identity = req.auth.role === 'governor' ? 'governor' : 'student:' + req.auth.studentId;
+  try {
+    await db.clearChatHistory(identity, courseId);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Could not clear chat history.' });
+  }
+}
+
+module.exports = { askAssistant, getHistory, clearHistory };
