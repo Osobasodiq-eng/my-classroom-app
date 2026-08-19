@@ -275,6 +275,42 @@ async function resetStudentPassword(studentId, passwordHash) {
   return result.rowCount > 0;
 }
 
+// Removing a student needs to touch three places, not just the roster:
+// their credential row (student_credentials, keyed by matric) and their
+// saved chat history (assistant_chats) both live outside the app_state
+// document on purpose — the same separation that protects passwords from
+// a Governor's save also means removing a student from the roster alone
+// does NOT free up their matric number. Without this, a removed student
+// could never sign up again with the same matric, since the orphaned
+// credential row would still match.
+async function removeStudent(studentId) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query('SELECT data, version FROM app_state WHERE id = 1 FOR UPDATE');
+    const data = rows[0].data;
+    const version = rows[0].version;
+
+    const before = (data.students || []).length;
+    data.students = (data.students || []).filter((s) => s.id !== studentId);
+    const removed = before !== data.students.length;
+
+    await client.query(
+      'UPDATE app_state SET data = $1, version = $2, updated_at = now() WHERE id = 1',
+      [data, version + 1]
+    );
+    await client.query('DELETE FROM student_credentials WHERE student_id = $1', [studentId]);
+    await client.query('DELETE FROM assistant_chats WHERE identity = $1', ['student:' + studentId]);
+    await client.query('COMMIT');
+    return { ok: true, removed, version: version + 1 };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 // Runs lazily on read, not on a schedule — there's no background job
 // runner here, so this is triggered by ordinary traffic instead. A cheap
 // unlocked check runs first so a normal request doesn't pay for a row
@@ -388,4 +424,4 @@ async function clearChatHistory(identity, courseId) {
   await pool.query('DELETE FROM assistant_chats WHERE identity = $1 AND course_id = $2', [identity, courseId]);
 }
 
-module.exports = { pool, init, getState, setState, signInAttendance, studentSignup, studentCredential, findStudentById, resetStudentPassword, saveFile, getFile, getFileText, finalizeExpiredSessions, getChatHistory, saveChatHistory, clearChatHistory, DEFAULT_DATA };
+module.exports = { pool, init, getState, setState, signInAttendance, studentSignup, studentCredential, findStudentById, resetStudentPassword, removeStudent, saveFile, getFile, getFileText, finalizeExpiredSessions, getChatHistory, saveChatHistory, clearChatHistory, DEFAULT_DATA };

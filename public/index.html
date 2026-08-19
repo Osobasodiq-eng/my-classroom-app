@@ -1925,7 +1925,23 @@
         await saveData(); render();
       });
     }
-    document.querySelectorAll("[data-delete-student]").forEach(btn => btn.addEventListener("click", async (e) => { e.stopPropagation(); data.students = data.students.filter(s => s.id !== btn.getAttribute("data-delete-student")); await saveData(); render(); }));
+    document.querySelectorAll("[data-delete-student]").forEach(btn => btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const studentId = btn.getAttribute("data-delete-student");
+      const student = data.students.find(s => s.id === studentId);
+      if(!confirm("Remove " + (student ? student.name : "this student") + " from the roll? If they signed up with a matric number and password, that will be cleared too, so they could sign up again if re-added.")) return;
+      try{
+        const res = await fetch("/api/students/" + encodeURIComponent(studentId), {
+          method: "DELETE",
+          headers: {"Authorization":"Bearer " + authToken},
+        });
+        const json = await res.json();
+        if(!res.ok){ alert(json.error || "Could not remove the student."); return; }
+        await loadData(); render();
+      }catch(err){
+        alert("Could not reach the server — check your connection and try again.");
+      }
+    }));
     document.querySelectorAll("[data-reset-password]").forEach(btn => btn.addEventListener("click", async (e) => {
       e.stopPropagation();
       const studentId = btn.getAttribute("data-reset-password");

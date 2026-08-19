@@ -32,6 +32,15 @@ app.post('/api/auth/login', login);
 app.post('/api/auth/student-signup', studentSignup);
 app.post('/api/auth/student-login', studentLogin);
 app.post('/api/students/:studentId/reset-password', requireGovernor, resetStudentPassword);
+app.delete('/api/students/:studentId', requireGovernor, async (req, res) => {
+  try {
+    const result = await db.removeStudent(req.params.studentId);
+    res.json(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Could not remove the student — try again.' });
+  }
+});
 app.post('/api/assistant/ask', requireAnyAuth, askAssistant);
 app.get('/api/assistant/history', requireAnyAuth, getHistory);
 app.post('/api/assistant/history/clear', requireAnyAuth, clearHistory);
