@@ -74,6 +74,16 @@
   .bar-fill.risk{background:linear-gradient(90deg, #8a4448, var(--rose));}
   .pct{font-family:'IBM Plex Mono', monospace; font-size:12.5px; color:var(--chalk); width:38px; text-align:right;}
   .risk-badge{font-family:'IBM Plex Mono',monospace; font-size:9.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--rose); border:1px solid rgba(193,102,107,0.4); border-radius:20px; padding:1px 7px; margin-left:8px;}
+  .notif-badge{ margin-left:auto; background:var(--brass); color:var(--ink-on-brass, #241d0f); font-family:'IBM Plex Mono',monospace; font-size:10.5px; font-weight:600; border-radius:20px; padding:1px 7px; min-width:18px; text-align:center; }
+  .notif-item{ display:flex; align-items:flex-start; gap:10px; padding:12px 0; border-bottom:1px solid var(--rule); cursor:pointer; }
+  .notif-item:last-child{ border-bottom:none; }
+  .notif-item:hover{ background:rgba(201,166,103,0.05); }
+  .notif-item.unread{ border-left:2px solid var(--brass); padding-left:10px; margin-left:-12px; }
+  .notif-dot{ width:7px; height:7px; border-radius:50%; background:var(--brass); flex-shrink:0; margin-top:6px; }
+  .notif-item.read .notif-dot{ background:transparent; }
+  .notif-kind{ font-family:'IBM Plex Mono',monospace; font-size:10px; text-transform:uppercase; letter-spacing:.06em; color:var(--chalk-faint); }
+  .highlight-flash{ animation: flashHighlight 2.2s ease-out; }
+  @keyframes flashHighlight{ 0%{ background:rgba(201,166,103,0.28); } 100%{ background:transparent; } }
   .form-row{display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px;}
   .field{display:flex; flex-direction:column; gap:5px; flex:1; min-width:140px;}
   .field label{font-size:11px; text-transform:uppercase; letter-spacing:.07em; color:var(--chalk-faint);}
@@ -214,6 +224,11 @@
         <svg width="16" height="16" viewBox="0 0 24 24"><path d="M4 13h6V4H4v9zM14 20h6v-9h-6v9zM14 4v4h6V4h-6zM4 20h6v-4H4v4z" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round"/></svg>
         Dashboard
       </div>
+      <div class="navbtn" data-tab="notifications">
+        <svg width="16" height="16" viewBox="0 0 24 24"><path d="M12 3a5 5 0 0 0-5 5v3.2c0 .5-.16 1-.46 1.4L5 15h14l-1.54-2.4c-.3-.4-.46-.9-.46-1.4V8a5 5 0 0 0-5-5z" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round"/><path d="M9.5 18a2.5 2.5 0 0 0 5 0" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg>
+        Notifications
+        <span class="notif-badge" id="notifBadge" style="display:none;"></span>
+      </div>
       <div class="navbtn" data-tab="attendance">
         <svg width="16" height="16" viewBox="0 0 24 24"><path d="M4 5h16M4 12h16M4 19h10M4 5v14" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/><path d="M17 15l2 2 3-3" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
         Attendance
@@ -260,6 +275,7 @@
   let assistantMessages = []; // {role, content, sources?, pending?}
   let assistantBusy = false;
   let assistantHistoryLoadedFor = null;
+  let notificationHighlight = null; // {tab, targetId} — set when a notification is clicked, consumed once by the target tab
   let selectedLectureId = null;
   let attendanceCourseFilter = "";
   let materialsCourseFilter = "";
@@ -315,7 +331,6 @@
     role = "student";
     assistantMessages = [];
     assistantHistoryLoadedFor = null;
-    dashboardLastSeenSnapshot = null;
     render();
   }
 
@@ -549,34 +564,56 @@
     catch(e){ return false; }
   }
 
-  // ---------- DASHBOARD ----------
+  // ---------- NOTIFICATIONS ----------
 
-  function studentLastSeenKey(){ return "lastSeen:" + (studentInfo ? studentInfo.id : "anon"); }
-  function getStudentLastSeen(){ return localStorage.getItem(studentLastSeenKey()) || "1970-01-01"; }
-  function markStudentSeenNow(){ if(studentInfo) localStorage.setItem(studentLastSeenKey(), new Date().toISOString()); }
-  let dashboardLastSeenSnapshot = null; // captured once per session so the "new" badge doesn't disappear mid-visit
+  function notifSeenKey(){ return "seenNotifs:" + (studentInfo ? studentInfo.id : "anon"); }
+  function getSeenNotifIds(){ try{ return new Set(JSON.parse(localStorage.getItem(notifSeenKey())||"[]")); }catch(e){ return new Set(); } }
+  function markNotifSeen(id){ const s = getSeenNotifIds(); s.add(id); localStorage.setItem(notifSeenKey(), JSON.stringify([...s])); }
+  function markAllNotifsSeen(items){ const s = getSeenNotifIds(); items.forEach(i => s.add(i.id)); localStorage.setItem(notifSeenKey(), JSON.stringify([...s])); }
+
+  function buildNotifications(){
+    const items = [];
+    data.announcements.forEach(a => items.push({id:"ann-"+a.id, kind:"Announcement", title:a.title, date:a.date, tab:"announcements", targetId:a.id}));
+    data.assignments.forEach(a => items.push({id:"asg-"+a.id, kind:"Assignment", title:a.title, date:a.createdAt||a.dueDate||"", tab:"assignments", targetId:a.id, courseId:a.courseId}));
+    data.materials.forEach(m => items.push({id:"mat-"+m.id, kind:"Material", title:m.title, date:m.date||"", tab:"materials", targetId:m.id, courseId:m.courseId}));
+    items.sort((a,b) => (b.date||"").localeCompare(a.date||""));
+    return items;
+  }
+
+  function renderNotifications(){
+    const items = buildNotifications();
+    const seen = getSeenNotifIds();
+    const unreadCount = items.filter(i => !seen.has(i.id)).length;
+    return '<div class="panel">' +
+      '<div class="card-title-row" style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">' +
+        '<div><h2 style="margin:0;">Notifications</h2><p class="hint" style="margin-top:2px;">' + (unreadCount ? unreadCount + " unread" : "You're all caught up") + '</p></div>' +
+        (unreadCount ? '<button class="btn ghost small" type="button" id="markAllNotifsRead">Mark all as read</button>' : '') +
+      '</div>' +
+      (items.length === 0 ? '<div class="empty">Nothing posted yet.</div>' :
+        items.slice(0,40).map(n => {
+          const isUnread = !seen.has(n.id);
+          const course = n.courseId ? courseOf(n.courseId) : null;
+          return '<div class="notif-item ' + (isUnread?"unread":"read") + '" data-notif="' + n.id + '" data-notif-tab="' + n.tab + '" data-notif-target="' + n.targetId + '">' +
+            '<span class="notif-dot"></span>' +
+            '<div><span class="notif-kind">' + n.kind + (course ? " · " + escapeHtml(course.name) : "") + '</span>' +
+            '<div style="font-size:13.5px; margin-top:2px;">' + escapeHtml(n.title) + '</div>' +
+            '<div class="hint" style="margin-top:2px;">' + fmtDate(n.date) + '</div></div>' +
+          '</div>';
+        }).join("")
+      ) +
+    '</div>';
+  }
 
   function renderDashboard(){
     if(role === "student"){
-      if(dashboardLastSeenSnapshot === null){
-        dashboardLastSeenSnapshot = getStudentLastSeen().slice(0,10);
-        markStudentSeenNow();
-      }
-      const newAssignments = data.assignments.filter(a => (a.createdAt||"") > dashboardLastSeenSnapshot);
-      const newAnnouncements = data.announcements.filter(a => (a.date||"") > dashboardLastSeenSnapshot);
-      const newMaterials = data.materials.filter(m => (m.date||"") > dashboardLastSeenSnapshot);
-      const notifParts = [];
-      if(newAnnouncements.length) notifParts.push(newAnnouncements.length + " new announcement" + (newAnnouncements.length===1?"":"s"));
-      if(newAssignments.length) notifParts.push(newAssignments.length + " new assignment" + (newAssignments.length===1?"":"s"));
-      if(newMaterials.length) notifParts.push(newMaterials.length + " new material" + (newMaterials.length===1?"":"s"));
-
+      const unreadCount = buildNotifications().filter(i => !getSeenNotifIds().has(i.id)).length;
       const me = studentInfo ? data.students.find(s => s.id === studentInfo.id) : null;
       const st = me ? studentStats(me.id) : {present:0, total:0, pct:null};
       const pctLabel = st.pct === null ? "—" : st.pct + "%";
       const upcomingAssignments = [...data.assignments].filter(a => !a.dueDate || a.dueDate >= new Date().toISOString().slice(0,10)).sort((a,b)=>(a.dueDate||"").localeCompare(b.dueDate||"")).slice(0,3);
       const recentAnnouncements = [...data.announcements].sort((a,b)=> (b.pinned - a.pinned) || (b.date||"").localeCompare(a.date||"")).slice(0,2);
       return (
-        (notifParts.length ? '<div class="panel" style="border:1px solid var(--brass);"><h2 style="font-size:15px;">🔔 New since your last visit</h2><p class="hint" style="margin-top:4px;">' + notifParts.join(" · ") + '</p></div>' : '') +
+        (unreadCount ? '<div class="panel" style="border:1px solid var(--brass); cursor:pointer;" id="dashboardNotifBanner"><h2 style="font-size:15px;">🔔 ' + unreadCount + ' unread notification' + (unreadCount===1?"":"s") + '</h2><p class="hint" style="margin-top:4px;">Click to view →</p></div>' : '') +
         '<div class="panel"><h2>' + escapeHtml(data.className) + '</h2>' +
         '<p class="hint">' + (me ? 'Welcome back, ' + escapeHtml(me.name) + '.' : 'Welcome.') + '</p>' +
         '<div class="stat-row">' +
@@ -789,7 +826,7 @@
     const list = items.map(m => {
       const lec = data.lectures.find(l => l.id === m.lectureId);
       const course = courseOf(m.courseId);
-      return '<div class="material-card"><span class="material-type" style="' + (course ? "border-color:" + course.color + "; color:" + course.color + ";" : "") + '">' + escapeHtml(m.type) + '</span>' +
+      return '<div class="material-card" data-material-id="' + m.id + '"><span class="material-type" style="' + (course ? "border-color:" + course.color + "; color:" + course.color + ";" : "") + '">' + escapeHtml(m.type) + '</span>' +
         '<div class="material-body"><p class="mtitle">' + escapeHtml(m.title) + '</p>' +
         '<div class="msub">' + (course ? escapeHtml(course.name)+" · " : "") + (lec ? escapeHtml(lec.title) : "General") + " · " + fmtDate(m.date) + '</div>' +
         (m.notes ? '<p class="mnotes">' + escapeHtml(m.notes) + '</p>' : "") +
@@ -838,7 +875,7 @@
     const list = items.map(a => {
       const course = courseOf(a.courseId);
       const overdue = a.dueDate && a.dueDate < today;
-      return '<div class="assignment-card"><h3>' + (overdue ? '<span class="overdue-badge">Overdue</span>' : '') + escapeHtml(a.title) + '</h3>' +
+      return '<div class="assignment-card" data-assignment-id="' + a.id + '"><h3>' + (overdue ? '<span class="overdue-badge">Overdue</span>' : '') + escapeHtml(a.title) + '</h3>' +
         '<div class="assignment-meta">' + (course ? escapeHtml(course.name) + " · " : "") + 'Due ' + fmtDate(a.dueDate) + '</div>' +
         (a.description ? '<div class="assignment-body">' + escapeHtml(a.description) + '</div>' : '') +
         (a.fileId ? '<div style="margin-top:6px;"><a href="/api/files/' + escapeAttr(a.fileId) + '" target="_blank" rel="noopener" style="color:var(--brass); font-size:13px;">Download ' + escapeHtml(a.fileName||"attachment") + ' →</a></div>' : '') +
@@ -869,7 +906,7 @@
     ) : "";
 
     const items = [...data.announcements].sort((a,b) => (b.pinned - a.pinned) || (b.date||"").localeCompare(a.date||""));
-    const list = items.map(a => '<div class="announce-card"><h3>' + (a.pinned ? '<span class="pin">Pinned</span>' : '') + escapeHtml(a.title) + '</h3>' +
+    const list = items.map(a => '<div class="announce-card" data-announcement-id="' + a.id + '"><h3>' + (a.pinned ? '<span class="pin">Pinned</span>' : '') + escapeHtml(a.title) + '</h3>' +
       '<div class="announce-meta">' + fmtDate(a.date) + '</div><div class="announce-body">' + escapeHtml(a.body) + '</div>' +
       (a.fileId ? '<div style="margin-top:6px;"><a href="/api/files/' + escapeAttr(a.fileId) + '" target="_blank" rel="noopener" style="color:var(--brass); font-size:13px;">Download ' + escapeHtml(a.fileName||"attachment") + ' →</a></div>' : '') +
       (role === "governor" ? '<div class="list-actions" style="margin-top:8px;"><button class="btn small ghost" data-toggle-pin="' + a.id + '">' + (a.pinned ? "Unpin" : "Pin") + '</button><button class="btn small danger" data-delete-announce="' + a.id + '">Remove</button></div>' : '') +
@@ -1423,16 +1460,34 @@
     }
 
     const GOVERNOR_ONLY_TABS = ["attendance", "roster"];
+    const STUDENT_ONLY_TABS = ["notifications"];
     if(role === "student" && GOVERNOR_ONLY_TABS.includes(activeTab)) activeTab = "mine";
+    if(role === "governor" && STUDENT_ONLY_TABS.includes(activeTab)) activeTab = "dashboard";
     GOVERNOR_ONLY_TABS.forEach(tab => {
       const btn = sideNav.querySelector('[data-tab="' + tab + '"]');
       if(btn) btn.style.display = (role === "governor") ? "flex" : "none";
     });
+    STUDENT_ONLY_TABS.forEach(tab => {
+      const btn = sideNav.querySelector('[data-tab="' + tab + '"]');
+      if(btn) btn.style.display = (role === "student") ? "flex" : "none";
+    });
     document.querySelectorAll("#sideNav .navbtn").forEach(b => b.classList.toggle("active", b.dataset.tab === activeTab));
     document.querySelectorAll("#roleSeg button").forEach(b => b.classList.toggle("active", b.dataset.role === role));
 
+    const notifBadge = document.getElementById("notifBadge");
+    if(notifBadge){
+      if(role === "student"){
+        const unread = buildNotifications().filter(i => !getSeenNotifIds().has(i.id)).length;
+        notifBadge.textContent = unread > 99 ? "99+" : String(unread);
+        notifBadge.style.display = unread > 0 ? "inline-block" : "none";
+      } else {
+        notifBadge.style.display = "none";
+      }
+    }
+
     const main = document.getElementById("mainArea");
     if(activeTab === "dashboard") main.innerHTML = renderDashboard();
+    else if(activeTab === "notifications") main.innerHTML = renderNotifications();
     else if(activeTab === "attendance") main.innerHTML = renderAttendance();
     else if(activeTab === "materials") main.innerHTML = renderMaterials();
     else if(activeTab === "assignments") main.innerHTML = renderAssignments();
@@ -1441,6 +1496,16 @@
     else if(activeTab === "roster") main.innerHTML = renderRoster();
     else if(activeTab === "mine") main.innerHTML = renderMyAttendance();
     else if(activeTab === "assistant") { main.innerHTML = renderAssistant(); attachAssistantEvents(); }
+
+    if(notificationHighlight && notificationHighlight.tab === activeTab){
+      const target = notificationHighlight.targetId;
+      const el = main.querySelector('[data-material-id="' + target + '"], [data-assignment-id="' + target + '"], [data-announcement-id="' + target + '"]');
+      if(el){
+        el.classList.add("highlight-flash");
+        setTimeout(() => el.scrollIntoView({behavior:"smooth", block:"center"}), 30);
+      }
+      notificationHighlight = null;
+    }
 
     let drawerHost = document.getElementById("drawerHost");
     if(!drawerHost){ drawerHost = document.createElement("div"); drawerHost.id = "drawerHost"; document.body.appendChild(drawerHost); }
@@ -1506,6 +1571,22 @@
   }
 
   function attachEvents(){
+    document.querySelectorAll("[data-notif]").forEach(el => el.addEventListener("click", () => {
+      const id = el.getAttribute("data-notif");
+      const tab = el.getAttribute("data-notif-tab");
+      const targetId = el.getAttribute("data-notif-target");
+      markNotifSeen(id);
+      // Clear any active filter that could otherwise hide the item we're jumping to.
+      materialsCourseFilter = ""; materialsTypeFilter = ""; materialsSearch = ""; assignmentsCourseFilter = "";
+      notificationHighlight = {tab, targetId};
+      activeTab = tab;
+      render();
+    }));
+    const markAllNotifsRead = document.getElementById("markAllNotifsRead");
+    if(markAllNotifsRead) markAllNotifsRead.addEventListener("click", () => { markAllNotifsSeen(buildNotifications()); render(); });
+    const dashboardNotifBanner = document.getElementById("dashboardNotifBanner");
+    if(dashboardNotifBanner) dashboardNotifBanner.addEventListener("click", () => { activeTab = "notifications"; render(); });
+
     const lectureCourseSelect = document.getElementById("lectureCourseSelect");
     const lectureLecturerSelect = document.getElementById("lectureLecturerSelect");
     function refreshLecturerOptions(){
