@@ -301,6 +301,23 @@ You have a Render account connected — here's the one-click path.
 
 ## Project layout
 
+### CGPA calculator
+
+A self-service tool for students — Nigerian 5.0 scale (A=5, B=4, C=3,
+D=2, F=0). Not connected to any actual grading system in this app (there
+isn't one — this app tracks attendance, not grades), so it's entirely
+self-reported: students type in their own grades per course per
+semester. Saved per student in its own database table (`cgpa_records`),
+same reasoning as chat history and credentials — a Governor's save
+should never be able to touch a student's personal record.
+
+Governors can optionally set a **credit units** number on each course
+(in the course form) — when a student picks that course from the
+dropdown while adding a semester entry, its name and units auto-fill,
+though they can still type a custom course/units manually for anything
+not in the system (a prior semester, a course from before this app
+existed, etc).
+
 ```
 classroom-governor/
 ├── package.json

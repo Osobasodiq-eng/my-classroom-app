@@ -45,6 +45,30 @@ app.post('/api/assistant/ask', requireAnyAuth, askAssistant);
 app.get('/api/assistant/history', requireAnyAuth, getHistory);
 app.post('/api/assistant/history/clear', requireAnyAuth, clearHistory);
 
+// A student's own self-reported CGPA record — theirs to read and write,
+// nobody else's. requireStudent (not requireAnyAuth) since this has no
+// meaningful Governor use case the way the study assistant does.
+app.get('/api/cgpa', requireStudent, async (req, res) => {
+  try {
+    const semesters = await db.getCgpaRecord(req.auth.studentId);
+    res.json({ semesters });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Could not load your CGPA record.' });
+  }
+});
+app.put('/api/cgpa', requireStudent, async (req, res) => {
+  const { semesters } = req.body || {};
+  if (!Array.isArray(semesters)) return res.status(400).json({ error: 'Malformed request.' });
+  try {
+    await db.saveCgpaRecord(req.auth.studentId, semesters);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Could not save your CGPA record.' });
+  }
+});
+
 // Public: anyone with the site URL can read the register — this mirrors a
 // physical noticeboard, and students need it to populate the check-in
 // roster without an account. Only writes require the Governor token.

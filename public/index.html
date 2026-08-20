@@ -229,6 +229,10 @@
         Notifications
         <span class="notif-badge" id="notifBadge" style="display:none;"></span>
       </div>
+      <div class="navbtn" data-tab="cgpa">
+        <svg width="16" height="16" viewBox="0 0 24 24"><path d="M6 3h9l4 4v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round"/><path d="M9 13h6M9 17h4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M9 9h1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        CGPA Calculator
+      </div>
       <div class="navbtn" data-tab="attendance">
         <svg width="16" height="16" viewBox="0 0 24 24"><path d="M4 5h16M4 12h16M4 19h10M4 5v14" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/><path d="M17 15l2 2 3-3" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
         Attendance
@@ -276,6 +280,30 @@
   let assistantBusy = false;
   let assistantHistoryLoadedFor = null;
   let notificationHighlight = null; // {tab, targetId} — set when a notification is clicked, consumed once by the target tab
+  let cgpaSemesters = [];
+  let cgpaLoadedForStudent = null;
+
+  async function loadCgpa(){
+    if(!studentToken) return;
+    try{
+      const res = await fetch("/api/cgpa", { headers: {"Authorization":"Bearer " + studentToken} });
+      if(!res.ok) return;
+      const json = await res.json();
+      cgpaSemesters = json.semesters || [];
+      cgpaLoadedForStudent = studentInfo ? studentInfo.id : null;
+      render();
+    }catch(err){ /* keep whatever's already shown */ }
+  }
+  async function saveCgpa(){
+    if(!studentToken) return;
+    try{
+      await fetch("/api/cgpa", {
+        method: "PUT",
+        headers: {"Content-Type":"application/json", "Authorization":"Bearer " + studentToken},
+        body: JSON.stringify({semesters: cgpaSemesters}),
+      });
+    }catch(err){ /* best-effort; user can retry by editing again */ }
+  }
   let selectedLectureId = null;
   let attendanceCourseFilter = "";
   let materialsCourseFilter = "";
@@ -331,6 +359,8 @@
     role = "student";
     assistantMessages = [];
     assistantHistoryLoadedFor = null;
+    cgpaSemesters = [];
+    cgpaLoadedForStudent = null;
     render();
   }
 
@@ -461,6 +491,27 @@
     if(!data.attendance[lectureId]) data.attendance[lectureId] = {};
     if(status === "unmarked"){ delete data.attendance[lectureId][studentId]; return; }
     data.attendance[lectureId][studentId] = {status, method, at: new Date().toISOString()};
+  }
+
+  // ---------- CGPA CALCULATOR ----------
+  const GRADE_POINTS = {A:5, B:4, C:3, D:2, F:0}; // Nigerian 5.0 scale
+  function semesterGpa(entries){
+    let totalPoints = 0, totalUnits = 0;
+    entries.forEach(e => {
+      const u = parseFloat(e.units) || 0;
+      const gp = GRADE_POINTS[e.grade];
+      if(u > 0 && gp !== undefined){ totalPoints += u * gp; totalUnits += u; }
+    });
+    return totalUnits ? totalPoints / totalUnits : null;
+  }
+  function cumulativeCgpa(semesters){
+    let totalPoints = 0, totalUnits = 0;
+    semesters.forEach(s => s.entries.forEach(e => {
+      const u = parseFloat(e.units) || 0;
+      const gp = GRADE_POINTS[e.grade];
+      if(u > 0 && gp !== undefined){ totalPoints += u * gp; totalUnits += u; }
+    }));
+    return totalUnits ? totalPoints / totalUnits : null;
   }
 
   function studentStats(studentId){
@@ -604,7 +655,132 @@
     '</div>';
   }
 
-  function renderDashboard(){
+  // ---------- CGPA CALCULATOR (rendering) ----------
+
+  function renderCgpa(){
+    const cumulative = cumulativeCgpa(cgpaSemesters);
+    return '<div class="panel">' +
+      '<div class="card-title-row" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">' +
+        '<div><h2 style="margin:0;">CGPA Calculator</h2><p class="hint" style="margin-top:2px;">Nigerian 5.0 scale (A=5, B=4, C=3, D=2, F=0) · saved automatically</p></div>' +
+        '<div class="stat" style="min-width:120px;"><div class="num" id="cgpaCumulativeDisplay">' + (cumulative===null?"—":cumulative.toFixed(2)) + '</div><div class="lbl">Cumulative CGPA</div></div>' +
+      '</div>' +
+      (cgpaSemesters.length === 0 ? '<div class="empty">No semesters added yet. Add one below to get started.</div>' : cgpaSemesters.map(renderCgpaSemester).join("")) +
+      '<button class="btn ghost small" type="button" id="addCgpaSemester" style="margin-top:14px;">+ Add semester</button>' +
+    '</div>';
+  }
+
+  function renderCgpaSemester(sem){
+    const gpa = semesterGpa(sem.entries);
+    const courseOptions = activeCourses();
+    return '<div class="panel" style="margin-top:14px; background:var(--panel-raised);" data-semester-id="' + sem.id + '">' +
+      '<div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:10px; flex-wrap:wrap;">' +
+        '<input type="text" data-semester-label="' + sem.id + '" value="' + escapeAttr(sem.label) + '" placeholder="e.g. First Semester, Year 1" style="font-family:\'Fraunces\',serif; font-size:15px; background:transparent; border:none; border-bottom:1px solid var(--rule); padding:4px 0; color:var(--chalk); max-width:260px;" />' +
+        '<div style="display:flex; align-items:center; gap:14px;">' +
+          '<span class="hint">Semester GPA: <strong style="color:var(--brass);" data-semester-gpa="' + sem.id + '">' + (gpa===null?"—":gpa.toFixed(2)) + '</strong></span>' +
+          '<button class="btn small danger" type="button" data-remove-semester="' + sem.id + '">Remove semester</button>' +
+        '</div>' +
+      '</div>' +
+      (sem.entries.length === 0 ? '<p class="hint">No courses added to this semester yet.</p>' :
+        '<table style="width:100%;"><thead><tr><th style="text-align:left;">Course</th><th style="width:90px;">Units</th><th style="width:90px;">Grade</th><th style="width:34px;"></th></tr></thead><tbody>' +
+          sem.entries.map(en => renderCgpaEntryRow(sem.id, en, courseOptions)).join("") +
+        '</tbody></table>'
+      ) +
+      '<button class="btn ghost small" type="button" data-add-entry="' + sem.id + '" style="margin-top:10px;">+ Add course</button>' +
+    '</div>';
+  }
+
+  function renderCgpaEntryRow(semId, en, courseOptions){
+    return '<tr data-entry-id="' + en.id + '">' +
+      '<td style="padding:6px 6px 6px 0;">' +
+        '<select class="cgpa-course-picker" data-sem="' + semId + '" data-entry="' + en.id + '" style="margin-bottom:4px; width:100%;">' +
+          '<option value="">— custom —</option>' +
+          courseOptions.map(c => '<option value="' + c.id + '" ' + (en.courseId===c.id?'selected':'') + '>' + escapeHtml(c.name) + '</option>').join("") +
+        '</select>' +
+        '<input type="text" data-field="name" data-sem="' + semId + '" data-entry="' + en.id + '" value="' + escapeAttr(en.name||"") + '" placeholder="Course name" style="width:100%;" />' +
+      '</td>' +
+      '<td style="padding:6px;"><input type="number" min="0" max="12" data-field="units" data-sem="' + semId + '" data-entry="' + en.id + '" value="' + (en.units||"") + '" style="width:100%;" /></td>' +
+      '<td style="padding:6px;"><select data-field="grade" data-sem="' + semId + '" data-entry="' + en.id + '" style="width:100%;">' +
+        ["","A","B","C","D","F"].map(g => '<option value="' + g + '" ' + (en.grade===g?'selected':'') + '>' + (g||"—") + '</option>').join("") +
+      '</select></td>' +
+      '<td style="padding:6px;"><button class="btn small danger" type="button" data-remove-entry="' + en.id + '" data-sem="' + semId + '" title="Remove">✕</button></td>' +
+    '</tr>';
+  }
+
+  function attachCgpaEvents(){
+    if(cgpaLoadedForStudent !== (studentInfo ? studentInfo.id : null)){
+      loadCgpa();
+    }
+
+    function findSemester(id){ return cgpaSemesters.find(s => s.id === id); }
+    function findEntry(sem, id){ return sem ? sem.entries.find(e => e.id === id) : null; }
+    function recalcDisplays(){
+      const cumEl = document.getElementById("cgpaCumulativeDisplay");
+      if(cumEl){ const c = cumulativeCgpa(cgpaSemesters); cumEl.textContent = c===null ? "—" : c.toFixed(2); }
+      cgpaSemesters.forEach(sem => {
+        const el = document.querySelector('[data-semester-gpa="' + sem.id + '"]');
+        if(el){ const g = semesterGpa(sem.entries); el.textContent = g===null ? "—" : g.toFixed(2); }
+      });
+    }
+
+    const addSemBtn = document.getElementById("addCgpaSemester");
+    if(addSemBtn) addSemBtn.addEventListener("click", () => {
+      cgpaSemesters.push({id: uid(), label: "Semester " + (cgpaSemesters.length+1), entries: []});
+      render(); saveCgpa();
+    });
+    document.querySelectorAll("[data-remove-semester]").forEach(btn => btn.addEventListener("click", () => {
+      if(!confirm("Remove this semester and all its courses?")) return;
+      cgpaSemesters = cgpaSemesters.filter(s => s.id !== btn.getAttribute("data-remove-semester"));
+      render(); saveCgpa();
+    }));
+    document.querySelectorAll("[data-add-entry]").forEach(btn => btn.addEventListener("click", () => {
+      const sem = findSemester(btn.getAttribute("data-add-entry"));
+      if(!sem) return;
+      sem.entries.push({id: uid(), courseId:"", name:"", units:"", grade:""});
+      render(); saveCgpa();
+    }));
+    document.querySelectorAll("[data-remove-entry]").forEach(btn => btn.addEventListener("click", () => {
+      const sem = findSemester(btn.getAttribute("data-sem"));
+      if(!sem) return;
+      sem.entries = sem.entries.filter(e => e.id !== btn.getAttribute("data-remove-entry"));
+      render(); saveCgpa();
+    }));
+    document.querySelectorAll("[data-semester-label]").forEach(input => input.addEventListener("blur", () => {
+      const sem = findSemester(input.getAttribute("data-semester-label"));
+      if(sem){ sem.label = input.value.trim() || sem.label; saveCgpa(); }
+    }));
+    document.querySelectorAll(".cgpa-course-picker").forEach(sel => sel.addEventListener("change", () => {
+      const sem = findSemester(sel.getAttribute("data-sem"));
+      const entry = findEntry(sem, sel.getAttribute("data-entry"));
+      if(!entry) return;
+      entry.courseId = sel.value;
+      if(sel.value){
+        const course = courseOf(sel.value);
+        if(course){ entry.name = course.name; if(course.units) entry.units = course.units; }
+      }
+      render(); saveCgpa();
+    }));
+    document.querySelectorAll('[data-field="name"]').forEach(input => {
+      input.addEventListener("input", () => {
+        const sem = findSemester(input.getAttribute("data-sem"));
+        const entry = findEntry(sem, input.getAttribute("data-entry"));
+        if(entry) entry.name = input.value;
+      });
+      input.addEventListener("blur", () => saveCgpa());
+    });
+    document.querySelectorAll('[data-field="units"]').forEach(input => {
+      input.addEventListener("input", () => {
+        const sem = findSemester(input.getAttribute("data-sem"));
+        const entry = findEntry(sem, input.getAttribute("data-entry"));
+        if(entry){ entry.units = input.value; recalcDisplays(); }
+      });
+      input.addEventListener("blur", () => saveCgpa());
+    });
+    document.querySelectorAll('[data-field="grade"]').forEach(sel => sel.addEventListener("change", () => {
+      const sem = findSemester(sel.getAttribute("data-sem"));
+      const entry = findEntry(sem, sel.getAttribute("data-entry"));
+      if(entry){ entry.grade = sel.value; recalcDisplays(); saveCgpa(); }
+    }));
+  }  function renderDashboard(){
     if(role === "student"){
       const unreadCount = buildNotifications().filter(i => !getSeenNotifIds().has(i.id)).length;
       const me = studentInfo ? data.students.find(s => s.id === studentInfo.id) : null;
@@ -934,6 +1110,7 @@
       '<div class="form-row">' +
         '<div class="field"><label>Course code</label><input name="code" value="' + (editingCourse?escapeAttr(editingCourse.code||""):"") + '" placeholder="e.g. STRAT-601" /></div>' +
         '<div class="field" style="flex:2;"><label>Course name</label><input required name="name" value="' + (editingCourse?escapeAttr(editingCourse.name):"") + '" placeholder="e.g. Marketing Management" /></div>' +
+        '<div class="field" style="max-width:110px;"><label>Credit units</label><input type="number" min="1" max="12" name="units" value="' + (editingCourse && editingCourse.units ? editingCourse.units : "") + '" placeholder="e.g. 3" /></div>' +
       '</div>' +
       '<div class="form-row"><div class="field"><label>Color tag</label><div style="display:flex; gap:8px; padding-top:4px;">' +
         COURSE_COLORS.map(col => '<label style="cursor:pointer;"><input type="radio" name="color" value="' + col + '" ' + (((editingCourse && editingCourse.color===col) || (!editingCourse && col===COURSE_COLORS[0])) ? "checked" : "") + ' style="display:none;" class="colorRadio" /><span class="course-dot" data-swatch="' + col + '" style="background:' + col + '; width:22px; height:22px; outline:2px solid transparent;"></span></label>').join("") +
@@ -982,7 +1159,7 @@
         actions +
         (hidden ? '<span class="risk-badge" style="margin-bottom:4px;">Archived</span>' : '') +
         '<h3><span class="course-dot" style="background:' + c.color + '"></span>' + escapeHtml(c.name) + '</h3>' +
-        '<div class="ccode">' + escapeHtml(c.code||"—") + '</div>' +
+        '<div class="ccode">' + escapeHtml(c.code||"—") + (c.units ? ' · ' + c.units + ' unit' + (c.units===1?'':'s') : '') + '</div>' +
         '<div class="lecturers">' + escapeHtml(lecturerNames) + '</div>' +
         '<div class="cstats"><span>' + lecCount + ' lecture' + (lecCount===1?'':'s') + '</span><span>' + matCount + ' material' + (matCount===1?'':'s') + '</span></div>' +
         '<button class="btn ghost small" data-open-course="' + c.id + '">Lecturers &amp; outline</button>' +
@@ -1460,7 +1637,7 @@
     }
 
     const GOVERNOR_ONLY_TABS = ["attendance", "roster"];
-    const STUDENT_ONLY_TABS = ["notifications"];
+    const STUDENT_ONLY_TABS = ["notifications", "cgpa"];
     if(role === "student" && GOVERNOR_ONLY_TABS.includes(activeTab)) activeTab = "mine";
     if(role === "governor" && STUDENT_ONLY_TABS.includes(activeTab)) activeTab = "dashboard";
     GOVERNOR_ONLY_TABS.forEach(tab => {
@@ -1488,6 +1665,7 @@
     const main = document.getElementById("mainArea");
     if(activeTab === "dashboard") main.innerHTML = renderDashboard();
     else if(activeTab === "notifications") main.innerHTML = renderNotifications();
+    else if(activeTab === "cgpa") { main.innerHTML = renderCgpa(); attachCgpaEvents(); }
     else if(activeTab === "attendance") main.innerHTML = renderAttendance();
     else if(activeTab === "materials") main.innerHTML = renderMaterials();
     else if(activeTab === "assignments") main.innerHTML = renderAssignments();
@@ -1852,6 +2030,7 @@
           code: fd.get("code").trim(),
           name: fd.get("name").trim(),
           color: fd.get("color") || COURSE_COLORS[0],
+          units: fd.get("units") ? parseInt(fd.get("units"), 10) : null,
           lecturers: pendingLecturers.map(l => ({id: l.id, name: l.name, email: l.email})),
           outlineText: fd.get("outlineText").trim(),
           outlineLink: fd.get("outlineLink").trim(),

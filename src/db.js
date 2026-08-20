@@ -74,6 +74,17 @@ async function init() {
       PRIMARY KEY (identity, course_id)
     );
   `);
+  // A student's own CGPA entries — self-reported grades they type in,
+  // not something the Governor tracks or edits. Kept in its own table for
+  // the same reason as the two above: it's the student's personal record,
+  // and a Governor save should never be able to touch it.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cgpa_records (
+      student_id TEXT PRIMARY KEY,
+      semesters JSONB NOT NULL DEFAULT '[]',
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
   const { rows } = await pool.query('SELECT id FROM app_state WHERE id = 1');
   if (rows.length === 0) {
     await pool.query(
@@ -301,6 +312,7 @@ async function removeStudent(studentId) {
     );
     await client.query('DELETE FROM student_credentials WHERE student_id = $1', [studentId]);
     await client.query('DELETE FROM assistant_chats WHERE identity = $1', ['student:' + studentId]);
+    await client.query('DELETE FROM cgpa_records WHERE student_id = $1', [studentId]);
     await client.query('COMMIT');
     return { ok: true, removed, version: version + 1 };
   } catch (err) {
@@ -424,4 +436,19 @@ async function clearChatHistory(identity, courseId) {
   await pool.query('DELETE FROM assistant_chats WHERE identity = $1 AND course_id = $2', [identity, courseId]);
 }
 
-module.exports = { pool, init, getState, setState, signInAttendance, studentSignup, studentCredential, findStudentById, resetStudentPassword, removeStudent, saveFile, getFile, getFileText, finalizeExpiredSessions, getChatHistory, saveChatHistory, clearChatHistory, DEFAULT_DATA };
+async function getCgpaRecord(studentId) {
+  const { rows } = await pool.query('SELECT semesters FROM cgpa_records WHERE student_id = $1', [studentId]);
+  return rows.length ? rows[0].semesters : [];
+}
+
+async function saveCgpaRecord(studentId, semesters) {
+  await pool.query(
+    `INSERT INTO cgpa_records (student_id, semesters, updated_at)
+     VALUES ($1, $2, now())
+     ON CONFLICT (student_id)
+     DO UPDATE SET semesters = $2, updated_at = now()`,
+    [studentId, JSON.stringify(semesters)]
+  );
+}
+
+module.exports = { pool, init, getState, setState, signInAttendance, studentSignup, studentCredential, findStudentById, resetStudentPassword, removeStudent, saveFile, getFile, getFileText, finalizeExpiredSessions, getChatHistory, saveChatHistory, clearChatHistory, getCgpaRecord, saveCgpaRecord, DEFAULT_DATA };
