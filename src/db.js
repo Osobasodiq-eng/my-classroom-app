@@ -65,6 +65,9 @@ async function init() {
   // Kept separate from app_state for the same reason credentials and
   // files are: a Governor's whole-document save shouldn't be able to
   // wipe out a student's saved chat history, and this way it can't.
+  // Superseded by assistant_conversations below (which supports multiple
+  // saved threads per student instead of one rolling one) — left in place
+  // rather than dropped, so nothing existing gets silently deleted.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS assistant_chats (
       identity TEXT NOT NULL,
@@ -74,6 +77,21 @@ async function init() {
       PRIMARY KEY (identity, course_id)
     );
   `);
+  // Each row is one saved conversation thread — a student can have several
+  // per course and browse back through past ones, not just one rolling
+  // conversation that gets overwritten by "New chat".
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS assistant_conversations (
+      id TEXT PRIMARY KEY,
+      identity TEXT NOT NULL,
+      course_id TEXT NOT NULL,
+      title TEXT NOT NULL DEFAULT '',
+      messages JSONB NOT NULL DEFAULT '[]',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_assistant_conversations_lookup ON assistant_conversations (identity, course_id, updated_at DESC);`);
   // A student's own CGPA entries — self-reported grades they type in,
   // not something the Governor tracks or edits. Kept in its own table for
   // the same reason as the two above: it's the student's personal record,
@@ -312,6 +330,7 @@ async function removeStudent(studentId) {
     );
     await client.query('DELETE FROM student_credentials WHERE student_id = $1', [studentId]);
     await client.query('DELETE FROM assistant_chats WHERE identity = $1', ['student:' + studentId]);
+    await client.query('DELETE FROM assistant_conversations WHERE identity = $1', ['student:' + studentId]);
     await client.query('DELETE FROM cgpa_records WHERE student_id = $1', [studentId]);
     await client.query('COMMIT');
     return { ok: true, removed, version: version + 1 };
@@ -410,30 +429,54 @@ async function getFileText(id) {
   return text;
 }
 
-const MAX_SAVED_MESSAGES = 40;
+const MAX_SAVED_MESSAGES = 60;
 
-async function getChatHistory(identity, courseId) {
+// Lightweight — just enough to render a conversation list without pulling
+// every saved message for every thread.
+async function listConversations(identity, courseId) {
   const { rows } = await pool.query(
-    'SELECT messages FROM assistant_chats WHERE identity = $1 AND course_id = $2',
+    'SELECT id, title, created_at, updated_at FROM assistant_conversations WHERE identity = $1 AND course_id = $2 ORDER BY updated_at DESC',
     [identity, courseId]
   );
-  return rows.length ? rows[0].messages : [];
+  return rows;
 }
 
-async function saveChatHistory(identity, courseId, messages) {
-  const trimmed = messages.slice(-MAX_SAVED_MESSAGES);
-  await pool.query(
-    `INSERT INTO assistant_chats (identity, course_id, messages, updated_at)
-     VALUES ($1, $2, $3, now())
-     ON CONFLICT (identity, course_id)
-     DO UPDATE SET messages = $3, updated_at = now()`,
-    [identity, courseId, JSON.stringify(trimmed)]
+// Scoped to identity so one student can never fetch another's saved
+// conversation just by guessing or reusing an id.
+async function getConversation(identity, id) {
+  const { rows } = await pool.query(
+    'SELECT id, course_id, title, messages FROM assistant_conversations WHERE id = $1 AND identity = $2',
+    [id, identity]
   );
-  return trimmed;
+  return rows[0] || null;
 }
 
-async function clearChatHistory(identity, courseId) {
-  await pool.query('DELETE FROM assistant_chats WHERE identity = $1 AND course_id = $2', [identity, courseId]);
+async function createConversation(identity, courseId) {
+  const id = 'conv-' + crypto.randomBytes(8).toString('hex');
+  await pool.query(
+    'INSERT INTO assistant_conversations (id, identity, course_id) VALUES ($1, $2, $3)',
+    [id, identity, courseId]
+  );
+  return id;
+}
+
+// Title is set once, from the first question, and left alone after —
+// so a conversation's name in the list stays stable even as it grows.
+async function appendToConversation(identity, id, messages, titleIfUnset) {
+  const trimmed = messages.slice(-MAX_SAVED_MESSAGES);
+  const { rows } = await pool.query(
+    `UPDATE assistant_conversations
+     SET messages = $1, updated_at = now(), title = CASE WHEN title = '' THEN $2 ELSE title END
+     WHERE id = $3 AND identity = $4
+     RETURNING title`,
+    [JSON.stringify(trimmed), titleIfUnset.slice(0, 80), id, identity]
+  );
+  return { messages: trimmed, title: rows.length ? rows[0].title : titleIfUnset };
+}
+
+async function deleteConversation(identity, id) {
+  const result = await pool.query('DELETE FROM assistant_conversations WHERE id = $1 AND identity = $2', [id, identity]);
+  return result.rowCount > 0;
 }
 
 async function getCgpaRecord(studentId) {
@@ -451,4 +494,4 @@ async function saveCgpaRecord(studentId, semesters) {
   );
 }
 
-module.exports = { pool, init, getState, setState, signInAttendance, studentSignup, studentCredential, findStudentById, resetStudentPassword, removeStudent, saveFile, getFile, getFileText, finalizeExpiredSessions, getChatHistory, saveChatHistory, clearChatHistory, getCgpaRecord, saveCgpaRecord, DEFAULT_DATA };
+module.exports = { pool, init, getState, setState, signInAttendance, studentSignup, studentCredential, findStudentById, resetStudentPassword, removeStudent, saveFile, getFile, getFileText, finalizeExpiredSessions, listConversations, getConversation, createConversation, appendToConversation, deleteConversation, getCgpaRecord, saveCgpaRecord, DEFAULT_DATA };

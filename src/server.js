@@ -5,7 +5,7 @@ const cors = require('cors');
 const multer = require('multer');
 const db = require('./db');
 const { login, requireGovernor, studentSignup, studentLogin, requireStudent, resetStudentPassword, requireAnyAuth } = require('./auth');
-const { askAssistant, getHistory, clearHistory } = require('./assistant');
+const { askAssistant, listConversations, getConversationHandler, deleteConversationHandler } = require('./assistant');
 
 // Files are held in memory only long enough to write them to Postgres —
 // nothing is written to local disk, which matters on Render's free tier
@@ -42,8 +42,9 @@ app.delete('/api/students/:studentId', requireGovernor, async (req, res) => {
   }
 });
 app.post('/api/assistant/ask', requireAnyAuth, askAssistant);
-app.get('/api/assistant/history', requireAnyAuth, getHistory);
-app.post('/api/assistant/history/clear', requireAnyAuth, clearHistory);
+app.get('/api/assistant/conversations', requireAnyAuth, listConversations);
+app.get('/api/assistant/conversations/:id', requireAnyAuth, getConversationHandler);
+app.delete('/api/assistant/conversations/:id', requireAnyAuth, deleteConversationHandler);
 
 // A student's own self-reported CGPA record — theirs to read and write,
 // nobody else's. requireStudent (not requireAnyAuth) since this has no

@@ -112,7 +112,7 @@ async function askAssistant(req, res) {
     return res.status(500).json({ error: 'The study assistant is not configured yet — GROQ_API_KEY is missing on the server.' });
   }
 
-  const { courseId, question } = req.body || {};
+  const { courseId, conversationId, question } = req.body || {};
   if (!courseId || typeof question !== 'string' || !question.trim()) {
     return res.status(400).json({ error: 'Pick a course and ask a question.' });
   }
@@ -128,15 +128,27 @@ async function askAssistant(req, res) {
     if (!course) return res.status(404).json({ error: 'Course not found.' });
     const materials = (data.materials || []).filter((m) => m.courseId === courseId);
 
-    const savedHistory = await db.getChatHistory(identity, courseId);
+    // A brand-new question with no conversationId starts a new thread;
+    // one with a conversationId continues an existing saved conversation
+    // (ownership is checked by getConversation — identity must match).
+    let convId = conversationId;
+    let savedMessages = [];
+    if (convId) {
+      const existing = await db.getConversation(identity, convId);
+      if (!existing) return res.status(404).json({ error: 'That conversation was not found.' });
+      savedMessages = existing.messages || [];
+    } else {
+      convId = await db.createConversation(identity, courseId);
+    }
+
     const userMessage = { role: 'user', content: question.trim().slice(0, MAX_MESSAGE_CHARS) };
-    const historyWithQuestion = [...savedHistory, userMessage];
+    const historyWithQuestion = [...savedMessages, userMessage];
 
     const { coreSections, materialSections } = await buildCourseContext({ course, materials });
     if (coreSections.length === 0 && materialSections.length === 0) {
       const reply = "There's nothing uploaded for " + course.name + " yet — no outline text or readable material files. Ask your Governor to add some, then try again.";
-      const updated = await db.saveChatHistory(identity, courseId, [...historyWithQuestion, { role: 'assistant', content: reply, sources: [] }]);
-      return res.json({ reply, sources: [], history: updated });
+      const saved = await db.appendToConversation(identity, convId, [...historyWithQuestion, { role: 'assistant', content: reply, sources: [] }], question.trim());
+      return res.json({ reply, sources: [], history: saved.messages, conversationId: convId, title: saved.title });
     }
 
     // Rank materials by relevance to the actual question asked, so with a
@@ -202,38 +214,48 @@ async function askAssistant(req, res) {
     const reply = ((json.choices || [])[0] && json.choices[0].message && json.choices[0].message.content || '').trim() || "I couldn't come up with an answer — try rephrasing your question.";
     const sources = included.map((s) => s.label);
 
-    const updated = await db.saveChatHistory(identity, courseId, [...historyWithQuestion, { role: 'assistant', content: reply, sources }]);
-    res.json({ reply, sources, history: updated });
+    const saved = await db.appendToConversation(identity, convId, [...historyWithQuestion, { role: 'assistant', content: reply, sources }], question.trim());
+    res.json({ reply, sources, history: saved.messages, conversationId: convId, title: saved.title });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Could not reach the study assistant — try again.' });
   }
 }
 
-async function getHistory(req, res) {
+async function listConversations(req, res) {
   const { courseId } = req.query || {};
   if (!courseId) return res.status(400).json({ error: 'courseId is required.' });
   const identity = req.auth.role === 'governor' ? 'governor' : 'student:' + req.auth.studentId;
   try {
-    const messages = await db.getChatHistory(identity, courseId);
-    res.json({ messages });
+    const conversations = await db.listConversations(identity, courseId);
+    res.json({ conversations });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Could not load chat history.' });
+    res.status(500).json({ error: 'Could not load your saved conversations.' });
   }
 }
 
-async function clearHistory(req, res) {
-  const { courseId } = req.body || {};
-  if (!courseId) return res.status(400).json({ error: 'courseId is required.' });
+async function getConversationHandler(req, res) {
   const identity = req.auth.role === 'governor' ? 'governor' : 'student:' + req.auth.studentId;
   try {
-    await db.clearChatHistory(identity, courseId);
-    res.json({ ok: true });
+    const conversation = await db.getConversation(identity, req.params.id);
+    if (!conversation) return res.status(404).json({ error: 'Conversation not found.' });
+    res.json({ conversation });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Could not clear chat history.' });
+    res.status(500).json({ error: 'Could not load that conversation.' });
   }
 }
 
-module.exports = { askAssistant, getHistory, clearHistory };
+async function deleteConversationHandler(req, res) {
+  const identity = req.auth.role === 'governor' ? 'governor' : 'student:' + req.auth.studentId;
+  try {
+    const removed = await db.deleteConversation(identity, req.params.id);
+    res.json({ ok: true, removed });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Could not delete that conversation.' });
+  }
+}
+
+module.exports = { askAssistant, listConversations, getConversationHandler, deleteConversationHandler };

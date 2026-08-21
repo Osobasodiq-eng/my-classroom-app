@@ -216,6 +216,15 @@ course outlines and public readings are especially sensitive about.
   ceilings). It resets whenever the server restarts/redeploys, and
   wouldn't coordinate correctly if you ever ran more than one server
   instance. Both are fine at this app's scale.
+- **Conversation history is saved as multiple, separate threads** — not
+  one rolling chat that gets overwritten. Each "New chat" starts a fresh
+  thread; a "History" button lists past ones by title (auto-set from the
+  first question asked) and lets a student reopen or delete any of them.
+  Threads are stored in `assistant_conversations`, scoped to the signed-in
+  identity — nobody can read or list another person's saved conversations,
+  including the Governor. An earlier, single-thread version of this used
+  a table called `assistant_chats`; that table is left in place unused
+  rather than dropped, so no data was lost in the switch.
 - Only signed-in users (Governor or a registered student) can use it —
   unlike materials and outlines, this endpoint isn't public.
 

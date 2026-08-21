@@ -288,7 +288,10 @@
   let assistantCourseId = null;
   let assistantMessages = []; // {role, content, sources?, pending?}
   let assistantBusy = false;
-  let assistantHistoryLoadedFor = null;
+  let assistantConversationId = null; // null = unsaved new chat; set once the first question creates/attaches a thread
+  let assistantConversations = []; // [{id, title, createdAt, updatedAt}] for the current course
+  let assistantConversationsLoadedFor = null;
+  let assistantShowHistory = false;
   let notificationHighlight = null; // {tab, targetId} — set when a notification is clicked, consumed once by the target tab
   let cgpaSemesters = [];
   let cgpaLoadedForStudent = null;
@@ -368,7 +371,9 @@
     myIdentityId = null;
     role = "student";
     assistantMessages = [];
-    assistantHistoryLoadedFor = null;
+    assistantConversationId = null;
+    assistantConversations = [];
+    assistantConversationsLoadedFor = null;
     cgpaSemesters = [];
     cgpaLoadedForStudent = null;
     render();
@@ -455,7 +460,9 @@
     role = "student";
     myIdentityId = null;
     assistantMessages = [];
-    assistantHistoryLoadedFor = null;
+    assistantConversationId = null;
+    assistantConversations = [];
+    assistantConversationsLoadedFor = null;
     render();
   }
 
@@ -1397,12 +1404,14 @@
         '<div><h2 style="margin:0;">Ask AI</h2><p class="hint" style="margin-top:2px;">Prioritizes this course\'s outline and materials, and says clearly when it\'s falling back to general knowledge.</p></div>' +
         '<div style="display:flex; gap:8px; align-items:center;">' +
           '<select id="assistantCourseSelect">' + availableCourses.map(c => '<option value="' + c.id + '" ' + (c.id===assistantCourseId?'selected':'') + '>' + escapeHtml(c.name) + '</option>').join("") + '</select>' +
+          '<button class="btn ghost small" type="button" id="assistantToggleHistory">' + (assistantShowHistory?"Hide history":"History" + (assistantConversations.length ? " (" + assistantConversations.length + ")" : "")) + '</button>' +
           '<button class="btn ghost small" type="button" id="assistantNewChat">New chat</button>' +
         '</div>' +
       '</div>' +
       (materialCount === 0 && !course.outlineText && !course.outlineFileId
         ? '<p class="hint" style="margin-top:10px; color:var(--rose);">No outline or materials uploaded for ' + escapeHtml(course.name) + ' yet — the assistant will have nothing to ground answers in.</p>'
         : '') +
+      (assistantShowHistory ? renderAssistantHistoryPanel() : '') +
       '<div class="chat-window" id="chatWindow">' +
         (assistantMessages.length === 0
           ? '<div class="chat-empty">Ask something like "what does the outline cover in week 3?" or "summarize the reading on X."</div>'
@@ -1421,51 +1430,93 @@
       '</div>';
   }
 
-  async function loadAssistantHistory(){
+  function renderAssistantHistoryPanel(){
+    if(assistantConversations.length === 0){
+      return '<div class="empty" style="margin:14px 0;">No saved conversations for this course yet — ask something to start one.</div>';
+    }
+    return '<div style="margin:14px 0; border:1px solid var(--rule); border-radius:8px; max-height:220px; overflow-y:auto;">' +
+      assistantConversations.map(c => {
+        const active = c.id === assistantConversationId;
+        return '<div class="notif-item" style="padding:10px 14px; cursor:pointer;' + (active ? ' background:rgba(201,166,103,0.08);' : '') + '" data-load-conversation="' + c.id + '">' +
+          '<div style="flex:1;"><div style="font-size:13px;">' + escapeHtml(c.title || "Untitled conversation") + '</div><div class="hint" style="margin-top:2px;">' + fmtDateTime(c.updated_at) + '</div></div>' +
+          '<button class="btn small danger" type="button" data-delete-conversation="' + c.id + '" title="Delete">✕</button>' +
+        '</div>';
+      }).join("") +
+    '</div>';
+  }
+
+  async function loadAssistantConversations(){
     const token = role === "governor" ? authToken : studentToken;
     if(!token) return;
     try{
-      const res = await fetch("/api/assistant/history?courseId=" + encodeURIComponent(assistantCourseId), {
+      const res = await fetch("/api/assistant/conversations?courseId=" + encodeURIComponent(assistantCourseId), {
         headers: {"Authorization":"Bearer " + token},
       });
       if(!res.ok) return;
       const json = await res.json();
-      assistantMessages = json.messages || [];
-      assistantHistoryLoadedFor = assistantCourseId;
+      assistantConversations = json.conversations || [];
+      assistantConversationsLoadedFor = assistantCourseId;
       render();
     }catch(err){ /* silently keep whatever's already shown */ }
+  }
+
+  async function loadConversation(id){
+    const token = role === "governor" ? authToken : studentToken;
+    if(!token) return;
+    try{
+      const res = await fetch("/api/assistant/conversations/" + encodeURIComponent(id), {
+        headers: {"Authorization":"Bearer " + token},
+      });
+      if(!res.ok) return;
+      const json = await res.json();
+      assistantMessages = json.conversation.messages || [];
+      assistantConversationId = json.conversation.id;
+      render();
+    }catch(err){ alert("Could not load that conversation — check your connection."); }
   }
 
   function attachAssistantEvents(){
     const chatWindow = document.getElementById("chatWindow");
     if(chatWindow) chatWindow.scrollTop = chatWindow.scrollHeight;
 
-    if(assistantHistoryLoadedFor !== assistantCourseId){
-      loadAssistantHistory();
+    if(assistantConversationsLoadedFor !== assistantCourseId){
+      loadAssistantConversations();
     }
 
     const courseSelect = document.getElementById("assistantCourseSelect");
     if(courseSelect) courseSelect.addEventListener("change", () => {
       assistantCourseId = courseSelect.value;
       assistantMessages = [];
-      assistantHistoryLoadedFor = null;
+      assistantConversationId = null;
+      assistantConversationsLoadedFor = null;
+      assistantShowHistory = false;
       render();
     });
     const newChatBtn = document.getElementById("assistantNewChat");
-    if(newChatBtn) newChatBtn.addEventListener("click", async () => {
-      const token = role === "governor" ? authToken : studentToken;
+    if(newChatBtn) newChatBtn.addEventListener("click", () => {
       assistantMessages = [];
+      assistantConversationId = null;
       render();
-      if(token){
-        try{
-          await fetch("/api/assistant/history/clear", {
-            method: "POST",
-            headers: {"Content-Type":"application/json", "Authorization":"Bearer " + token},
-            body: JSON.stringify({courseId: assistantCourseId}),
-          });
-        }catch(err){ /* local view already cleared; will resync next load */ }
-      }
     });
+    const toggleHistoryBtn = document.getElementById("assistantToggleHistory");
+    if(toggleHistoryBtn) toggleHistoryBtn.addEventListener("click", () => { assistantShowHistory = !assistantShowHistory; render(); });
+
+    document.querySelectorAll("[data-load-conversation]").forEach(el => el.addEventListener("click", (e) => {
+      if(e.target.closest("[data-delete-conversation]")) return;
+      loadConversation(el.getAttribute("data-load-conversation"));
+    }));
+    document.querySelectorAll("[data-delete-conversation]").forEach(btn => btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const id = btn.getAttribute("data-delete-conversation");
+      if(!(await confirmDialog("This conversation will be permanently deleted.", {title:"Delete this conversation?", confirmLabel:"Delete"}))) return;
+      const token = role === "governor" ? authToken : studentToken;
+      try{
+        await fetch("/api/assistant/conversations/" + encodeURIComponent(id), { method:"DELETE", headers:{"Authorization":"Bearer " + token} });
+      }catch(err){ /* list refresh below will reflect actual state either way */ }
+      if(assistantConversationId === id){ assistantMessages = []; assistantConversationId = null; }
+      assistantConversationsLoadedFor = null;
+      render();
+    }));
 
     const form = document.getElementById("assistantForm");
     if(form){
@@ -1489,16 +1540,18 @@
           const res = await fetch("/api/assistant/ask", {
             method: "POST",
             headers: {"Content-Type":"application/json", "Authorization":"Bearer " + token},
-            body: JSON.stringify({courseId: assistantCourseId, question}),
+            body: JSON.stringify({courseId: assistantCourseId, conversationId: assistantConversationId, question}),
           });
           const json = await res.json();
           assistantMessages.pop(); // remove the pending placeholder
           if(!res.ok){
             assistantMessages.push({role:"assistant", content: json.error || "Something went wrong."});
-          } else if(json.history){
-            assistantMessages = json.history; // server is authoritative — replaces local guess with what's actually saved
           } else {
-            assistantMessages.push({role:"assistant", content: json.reply, sources: json.sources});
+            if(json.history) assistantMessages = json.history; // server is authoritative — replaces local guess with what's actually saved
+            if(json.conversationId){
+              assistantConversationId = json.conversationId;
+              assistantConversationsLoadedFor = null; // list is now stale (new/updated thread) — refresh next render
+            }
           }
         }catch(err){
           assistantMessages.pop();
