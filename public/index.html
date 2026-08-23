@@ -1322,6 +1322,13 @@
         '<button class="btn" type="submit">Import students</button>' +
       '</form>' +
       (importSummary ? '<p class="hint" style="margin-top:10px; color:var(--brass);">' + escapeHtml(importSummary) + '</p>' : '') +
+      '</div>' +
+      '<div class="panel" style="margin-bottom:18px;"><h2>Free up a matric number</h2>' +
+      '<p class="hint">If a matric number won\'t let someone sign up even though they\'re not on the roster below, their old registration is stuck rather than actually removed. This clears it directly.</p>' +
+      '<form id="releaseMatricForm" class="form-row" style="align-items:flex-end;">' +
+        '<div class="field" style="max-width:220px;"><label>Matric number</label><input required name="matric" placeholder="e.g. CGU/20/1051" /></div>' +
+        '<button class="btn ghost small" type="submit">Free it up</button>' +
+      '</form>' +
       '</div>'
     ) : "";
 
@@ -2294,6 +2301,30 @@
         await saveData(); render();
       });
     }
+    const releaseMatricForm = document.getElementById("releaseMatricForm");
+    if(releaseMatricForm){
+      releaseMatricForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const fd = new FormData(releaseMatricForm);
+        const matric = fd.get("matric").trim();
+        if(!matric) return;
+        const submitBtn = releaseMatricForm.querySelector('button[type="submit"]');
+        submitBtn.disabled = true; submitBtn.textContent = "Checking…";
+        try{
+          const res = await fetch("/api/matric/" + encodeURIComponent(matric), {
+            method: "DELETE",
+            headers: {"Authorization":"Bearer " + authToken},
+          });
+          const json = await res.json();
+          if(!res.ok){ alert(json.error || "Could not free that matric number."); }
+          else if(json.freed){ alert(matric + " is now free — that person can sign up again."); releaseMatricForm.reset(); }
+          else{ alert("No stuck registration found for " + matric + " — it may already be free, or the issue is something else."); }
+        }catch(err){
+          alert("Could not reach the server — check your connection and try again.");
+        }
+        submitBtn.disabled = false; submitBtn.textContent = "Free it up";
+      });
+    }
     const importForm = document.getElementById("importForm");
     if(importForm){
       const csvFileInput = document.getElementById("csvFileInput");
@@ -2320,7 +2351,7 @@
           const name = (cols[1]||"").trim();
           const email = (cols[2]||"").trim();
           if(!roll || !name) return;
-          const existing = data.students.find(s => s.roll === roll);
+          const existing = data.students.find(s => (s.roll||"").trim().toUpperCase() === roll.toUpperCase());
           if(existing){ existing.name = name; existing.email = email || existing.email; updated++; }
           else { data.students.push({id: uid(), roll, name, email}); added++; }
         });

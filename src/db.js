@@ -296,6 +296,17 @@ async function getFile(id) {
   return rows[0] || null;
 }
 
+// Frees a matric number directly by deleting its credential row, with no
+// dependency on a matching roster entry existing. Exists specifically for
+// registrations that got orphaned before removeStudent cleaned up
+// credentials on removal (or from any other stuck state) — the roster
+// row is long gone, so there's nothing left to click "Remove" on, but
+// the matric is still locked. This is the direct escape hatch for that.
+async function releaseMatric(matricRaw) {
+  const result = await pool.query('DELETE FROM student_credentials WHERE matric = $1', [matricRaw.trim().toUpperCase()]);
+  return result.rowCount > 0;
+}
+
 async function resetStudentPassword(studentId, passwordHash) {
   const result = await pool.query(
     'UPDATE student_credentials SET password_hash = $1 WHERE student_id = $2',
@@ -320,6 +331,7 @@ async function removeStudent(studentId) {
     const data = rows[0].data;
     const version = rows[0].version;
 
+    const target = (data.students || []).find((s) => s.id === studentId);
     const before = (data.students || []).length;
     data.students = (data.students || []).filter((s) => s.id !== studentId);
     const removed = before !== data.students.length;
@@ -329,6 +341,16 @@ async function removeStudent(studentId) {
       [data, version + 1]
     );
     await client.query('DELETE FROM student_credentials WHERE student_id = $1', [studentId]);
+    // Also clear by matric number directly, not just by this row's id. If
+    // an older duplicate roster entry (from before duplicate-matric
+    // checks existed, or from a bulk CSV import that matched loosely)
+    // left credentials pointing at a *different* id than the one being
+    // removed here, deleting only by student_id would leave that matric
+    // number permanently locked even though every visible roster row for
+    // it is gone. Removing a student should always free up their matric.
+    if (target && target.roll) {
+      await client.query('DELETE FROM student_credentials WHERE matric = $1', [target.roll.trim().toUpperCase()]);
+    }
     await client.query('DELETE FROM assistant_chats WHERE identity = $1', ['student:' + studentId]);
     await client.query('DELETE FROM assistant_conversations WHERE identity = $1', ['student:' + studentId]);
     await client.query('DELETE FROM cgpa_records WHERE student_id = $1', [studentId]);
@@ -494,4 +516,4 @@ async function saveCgpaRecord(studentId, semesters) {
   );
 }
 
-module.exports = { pool, init, getState, setState, signInAttendance, studentSignup, studentCredential, findStudentById, resetStudentPassword, removeStudent, saveFile, getFile, getFileText, finalizeExpiredSessions, listConversations, getConversation, createConversation, appendToConversation, deleteConversation, getCgpaRecord, saveCgpaRecord, DEFAULT_DATA };
+module.exports = { pool, init, getState, setState, signInAttendance, studentSignup, studentCredential, findStudentById, resetStudentPassword, removeStudent, releaseMatric, saveFile, getFile, getFileText, finalizeExpiredSessions, listConversations, getConversation, createConversation, appendToConversation, deleteConversation, getCgpaRecord, saveCgpaRecord, DEFAULT_DATA };

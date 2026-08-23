@@ -41,6 +41,15 @@ app.delete('/api/students/:studentId', requireGovernor, async (req, res) => {
     res.status(500).json({ error: 'Could not remove the student — try again.' });
   }
 });
+app.delete('/api/matric/:matric', requireGovernor, async (req, res) => {
+  try {
+    const freed = await db.releaseMatric(req.params.matric);
+    res.json({ ok: true, freed });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Could not release that matric number — try again.' });
+  }
+});
 app.post('/api/assistant/ask', requireAnyAuth, askAssistant);
 app.get('/api/assistant/conversations', requireAnyAuth, listConversations);
 app.get('/api/assistant/conversations/:id', requireAnyAuth, getConversationHandler);
