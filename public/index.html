@@ -175,6 +175,8 @@
 
   /* KIOSK / CHECK-IN */
   body.kiosk .app{max-width:520px; padding-top:8vh;}
+  .auth-gate{ max-width:440px; margin:8vh auto 0; padding:0 20px; }
+  .auth-gate .btn{ width:100%; padding:13px; margin-bottom:10px; }
   .kiosk-card{ background:var(--panel); border:1px solid var(--rule-strong); border-radius:16px; padding:32px 28px; text-align:center; }
   .kiosk-card .mark{ font-family:'Fraunces', serif; font-weight:700; font-size:13px; color:var(--brass); letter-spacing:.16em; text-transform:uppercase; margin-bottom:18px; display:inline-block; border:1px solid var(--brass-dim); border-radius:3px; padding:3px 9px; }
   .kiosk-card h1{font-family:'Fraunces',serif; font-size:26px; margin:6px 0 4px;}
@@ -1681,6 +1683,28 @@
     return m ? m[1].toUpperCase() : null;
   }
 
+  // ---------- AUTH GATE ----------
+  // Blocks the whole app (Dashboard, Materials, everything) behind a
+  // sign-in screen. Reading state from the server stays technically
+  // public at the API level (the check-in kiosk depends on that), but
+  // the app itself never shows anyone anything until they've picked
+  // Governor or Student and authenticated as one.
+  function renderAuthGate(){
+    return '<div class="auth-gate"><div class="kiosk-card">' +
+      '<span class="mark">Roll Call</span>' +
+      '<h1>' + escapeHtml(data.className || "Sign in") + '</h1>' +
+      '<p class="sub">Sign in to continue — as the Governor, or as a student.</p>' +
+      '<button class="btn" type="button" id="gateGovernorBtn">Sign in as Governor</button>' +
+      '<button class="btn ghost" type="button" id="gateStudentBtn">Sign in as Student</button>' +
+      '</div></div>';
+  }
+  function attachAuthGateEvents(){
+    const gateGovernorBtn = document.getElementById("gateGovernorBtn");
+    if(gateGovernorBtn) gateGovernorBtn.addEventListener("click", () => { loginOpen = true; loginError = ""; render(); });
+    const gateStudentBtn = document.getElementById("gateStudentBtn");
+    if(gateStudentBtn) gateStudentBtn.addEventListener("click", () => { studentAuthOpen = true; studentAuthMode = "signin"; studentAuthError = ""; render(); });
+  }
+
   function renderKiosk(code){
     const session = data.attendanceSessions.find(s => s.code === code);
     if(!session){
@@ -1762,7 +1786,22 @@
       return;
     } else if(tickTimer){ clearInterval(tickTimer); tickTimer = null; }
 
-    // ensure normal app shell exists (in case we came back from kiosk mode)
+    // Login/signup modals live in their own host, outside appRoot, so
+    // they survive the gate below wiping appRoot's content — needed so
+    // the gate's own buttons can actually open them.
+    let drawerHost = document.getElementById("drawerHost");
+    if(!drawerHost){ drawerHost = document.createElement("div"); drawerHost.id = "drawerHost"; document.body.appendChild(drawerHost); }
+
+    if(!authToken && !studentToken){
+      const appRoot = document.getElementById("appRoot");
+      appRoot.innerHTML = renderAuthGate();
+      drawerHost.innerHTML = renderLoginModal() + renderStudentAuthModal();
+      attachAuthGateEvents();
+      attachEvents(); // covers the login/signup form submissions inside the modals
+      return;
+    }
+
+    // ensure normal app shell exists (in case we came back from kiosk mode, or from the auth gate)
     if(!document.getElementById("classNameInput")) location.reload();
 
     document.getElementById("classNameInput").value = data.className;
@@ -1835,8 +1874,6 @@
       notificationHighlight = null;
     }
 
-    let drawerHost = document.getElementById("drawerHost");
-    if(!drawerHost){ drawerHost = document.createElement("div"); drawerHost.id = "drawerHost"; document.body.appendChild(drawerHost); }
     drawerHost.innerHTML = renderStudentDrawer() + renderCourseDrawer() + renderLoginModal() + renderStudentAuthModal();
 
     const signOutBtn = document.getElementById("signOutBtn");
