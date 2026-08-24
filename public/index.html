@@ -885,6 +885,8 @@
       const me = studentInfo ? data.students.find(s => s.id === studentInfo.id) : null;
       const st = me ? studentStats(me.id) : {present:0, total:0, pct:null};
       const pctLabel = st.pct === null ? "—" : st.pct + "%";
+      const activeIds = new Set(activeCourses().map(c => c.id));
+      const activeMaterialsCount = data.materials.filter(m => !m.courseId || activeIds.has(m.courseId)).length;
       const upcomingAssignments = [...data.assignments].filter(a => !a.dueDate || a.dueDate >= new Date().toISOString().slice(0,10)).sort((a,b)=>(a.dueDate||"").localeCompare(b.dueDate||"")).slice(0,3);
       const recentAnnouncements = [...data.announcements].sort((a,b)=> (b.pinned - a.pinned) || (b.date||"").localeCompare(a.date||"")).slice(0,2);
       return (
@@ -894,8 +896,8 @@
         '<div class="stat-row">' +
           '<div class="stat"><div class="num">' + pctLabel + '</div><div class="lbl">Your attendance</div></div>' +
           '<div class="stat"><div class="num">' + st.present + '/' + st.total + '</div><div class="lbl">Sessions present</div></div>' +
-          '<div class="stat"><div class="num">' + data.courses.length + '</div><div class="lbl">Course' + (data.courses.length===1?'':'s') + ' this term</div></div>' +
-          '<div class="stat"><div class="num">' + data.materials.length + '</div><div class="lbl">Reading materials</div></div>' +
+          '<div class="stat"><div class="num">' + activeCourses().length + '</div><div class="lbl">Course' + (activeCourses().length===1?'':'s') + ' this term</div></div>' +
+          '<div class="stat"><div class="num">' + activeMaterialsCount + '</div><div class="lbl">Reading materials</div></div>' +
         '</div>' +
         '<p class="hint" style="margin:12px 0 0;">Open <strong>My Attendance</strong> in the sidebar for your full session-by-session record.</p>' +
         '</div>' +
@@ -908,9 +910,10 @@
       );
     }
 
-    const totalLectures = data.lectures.length;
+    const activeIds = new Set(activeCourses().map(c => c.id));
+    const totalLectures = data.lectures.filter(l => !l.courseId || activeIds.has(l.courseId)).length;
     const totalStudents = data.students.length;
-    const totalMaterials = data.materials.length;
+    const totalMaterials = data.materials.filter(m => !m.courseId || activeIds.has(m.courseId)).length;
     const allPct = data.students.map(s => studentStats(s.id).pct).filter(p => p !== null);
     const avgAttendance = allPct.length ? Math.round(allPct.reduce((a,b)=>a+b,0)/allPct.length) + "%" : "—";
     const atRisk = data.students.map(s => ({s, st: studentStats(s.id)})).filter(x => x.st.pct !== null && x.st.pct < RISK_THRESHOLD);
@@ -933,7 +936,7 @@
 
     return (
       '<div class="panel"><h2>' + escapeHtml(data.className) + '</h2>' +
-      '<p class="hint">Overview across ' + data.courses.length + ' course' + (data.courses.length===1?'':'s') + ', lectures held, and reading materials shared.</p>' +
+      '<p class="hint">Overview across ' + activeCourses().length + ' course' + (activeCourses().length===1?'':'s') + ', lectures held, and reading materials shared.</p>' +
       '<div class="stat-row">' +
         '<div class="stat"><div class="num">' + totalLectures + '</div><div class="lbl">Lectures logged</div></div>' +
         '<div class="stat"><div class="num">' + totalStudents + '</div><div class="lbl">Students on roster</div></div>' +
@@ -1806,7 +1809,9 @@
 
     document.getElementById("classNameInput").value = data.className;
     document.getElementById("classNameInput").readOnly = (role !== "governor");
-    document.getElementById("classSub").textContent = data.students.length + " students · " + data.courses.length + " courses · " + data.lectures.length + " lectures logged";
+    const headerActiveIds = new Set(activeCourses().map(c => c.id));
+    const headerLectureCount = data.lectures.filter(l => !l.courseId || headerActiveIds.has(l.courseId)).length;
+    document.getElementById("classSub").textContent = data.students.length + " students · " + activeCourses().length + " courses · " + headerLectureCount + " lectures logged";
 
     const sideNav = document.getElementById("sideNav");
     let myTabBtn = sideNav.querySelector('[data-tab="mine"]');
