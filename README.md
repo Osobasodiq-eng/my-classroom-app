@@ -33,29 +33,67 @@ existing 1,300-line frontend's rendering logic — it already worked
 entirely off one in-memory `data` object, so the API just had to give
 that object a real home.
 
-**Trade-off to know about:** if you outgrow "one Governor running one
-class register" — e.g. multiple governors, multiple classes on one
-deployment, or you want the database itself to enforce things like "a
-student can't be added twice" — you'd want to move to proper relational
-tables (`courses`, `students`, `attendance_records`, etc). That's a
-bigger rewrite touching the frontend too, so treat it as a "phase 2"
-rather than something to do now.
+**Trade-off to know about:** the data model below (one JSON document per
+stream) is still simpler than a fully relational schema, which is fine —
+each stream's document is independent, so this doesn't need to change as
+more streams are added. If a single stream's data outgrows "one JSON
+blob" — e.g. you want the database itself to enforce things like "a
+student can't be added twice" *within* that stream — you'd want proper
+relational tables (`courses`, `students`, `attendance_records`, etc.) for
+that stream's data specifically. That's a bigger rewrite touching the
+frontend too, so treat it as a "phase 2" rather than something to do now.
+
+### Multi-tenant streams
+
+Each Governor runs their own independent **stream** — their own class,
+with its own roster, courses, attendance, and materials. Streams are
+fully walled off from each other, with no shared "admin" view across
+them anywhere in the app (see `streams` table in `src/db.js`):
+
+- **Any Governor can sign up and create their own stream**, self-serve —
+  no invitation or operator setup needed. Signing up asks for a stream
+  name, email, and password, and immediately returns a join code/link.
+- **Students find their stream via that join code or link** — there's no
+  directory of streams to browse. A join code resolves to exactly one
+  stream (`GET /api/streams/by-code/:code`) and is what disambiguates
+  which stream a student's matric number, signup, and login all belong
+  to (the same matric number can exist independently in two different
+  streams without conflict).
+- **Nobody — including whoever runs this deployment — can list or read
+  across streams.** Every data-bearing route resolves exactly one
+  `streamId`, either from the caller's own signed token or from an
+  explicit join code/id supplied by the caller, and every query is
+  scoped to it. There's no super-admin route.
+- **Upgrading an existing single-tenant deployment:** `src/db.js` runs a
+  one-time migration on boot that wraps any pre-existing class data into
+  its own stream, so nothing is lost. See `GOVERNOR_EMAIL` /
+  `GOVERNOR_PASSWORD` in `.env.example` — if either was already set for
+  that deployment, the migration reuses it so the existing Governor can
+  keep signing in the same way; otherwise the data is preserved but
+  nobody can sign into it until you either set those and restart, or
+  reassign it manually.
 
 ### Auth model
 
-- **Reading the class register is public** — no login. This matches how
-  the app already worked (students browse freely) and is what lets a
-  student open a check-in link with zero setup.
-- **Writing requires the Governor password.** Set once as an environment
-  variable (`GOVERNOR_PASSWORD`), never stored in the database. Signing
-  in exchanges it for a 12-hour token.
-- **Students have real accounts now.** A student signs up with their
-  matric number, name, and a password of their choosing — this
-  automatically adds (or claims, if the Governor already pre-loaded that
-  matric number) their entry in the class roster. Their password is
-  hashed and stored in a dedicated `student_credentials` table, kept
-  completely separate from the main class data — so a Governor edit can
-  never accidentally wipe anyone's password (see below).
+- **Reading a stream's class register is public** — no login. This
+  matches how the app already worked (students browse freely) and is
+  what lets a student open a check-in link with zero setup. It's still
+  scoped to one stream at a time — either resolved from a signed-in
+  token, or from an explicit stream id the caller already has (from a
+  join link, or a saved session) — never all streams.
+- **Writing requires signing in as that stream's Governor** — email +
+  password, chosen at signup, never a shared operator-set password.
+  Signing in exchanges it for a 12-hour token scoped to that Governor's
+  own stream only.
+- **Students have real accounts now.** A student resolves their stream's
+  join code first, then signs up with their matric number, name, and a
+  password of their choosing — this automatically adds (or claims, if
+  the Governor already pre-loaded that matric number) their entry in
+  that stream's roster. Their password is hashed and stored in a
+  dedicated `student_credentials` table (keyed by stream + matric number,
+  so the same matric number in two different streams never collides),
+  kept completely separate from the main class data — so a Governor edit
+  can never accidentally wipe anyone's password (see below).
 - **Self-check-in requires being signed in**, and the server always uses
   the identity from the student's own token, never anything the client
   sends — so a student can only ever mark *themselves* present, never
@@ -242,15 +280,19 @@ course outlines and public readings are especially sensitive about.
    ```
    node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
    ```
-   Set `GOVERNOR_PASSWORD` to whatever you want to type in as Governor.
+   Leave `GOVERNOR_EMAIL`/`GOVERNOR_PASSWORD` blank — those are only for
+   migrating a pre-existing single-tenant database (see "Multi-tenant
+   streams" above). You'll create your own stream from the app itself.
 3. **Install and run:**
    ```
    npm install
    npm start
    ```
-4. Open `http://localhost:3000`. Click **Governor** in the top right —
-   it'll ask for the password you set. Everything else works exactly
-   like the prototype you already had.
+4. Open `http://localhost:3000`. Click **Sign in as Governor**, then
+   **Create a stream** — give it a name, your email, and a password.
+   You'll land in your new stream and get a join code to share with
+   students. Everything else works exactly like the prototype you
+   already had.
 
 ## Deploying to Render
 
@@ -272,15 +314,18 @@ You have a Render account connected — here's the one-click path.
    - A free Postgres database
    - A free web service running `npm install` then `npm start`
 
-   `DATABASE_URL` is wired automatically. You'll be prompted to fill in
-   one secret it can't generate for you: `GOVERNOR_PASSWORD`. `JWT_SECRET`
-   is generated for you.
-3. **Deploy.** First boot creates the database table automatically —
+   `DATABASE_URL` is wired automatically, and `JWT_SECRET` is generated
+   for you — no manual secrets needed to deploy. (`GROQ_API_KEY` is
+   optional, for the AI study assistant — add it in the Environment tab
+   whenever you're ready; without it that tab just shows a "not
+   configured" message.)
+3. **Deploy.** First boot creates the database tables automatically —
    nothing to run by hand.
 4. Your app is live at the `.onrender.com` URL Render gives you. Share
-   that URL (or a custom domain, which Render also supports) with
-   lecturers and students; each attendance link you generate is a
-   `#checkin=CODE` fragment on that same URL.
+   that URL with anyone who wants to run their own class — they click
+   **Sign in as Governor → Create a stream** and get their own isolated
+   roster and a join code to hand out to students. Each attendance link
+   you generate is a `#checkin=JOINCODE.CODE` fragment on that same URL.
 
 ### Known limitations worth knowing before you rely on this
 

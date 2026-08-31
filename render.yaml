@@ -17,8 +17,6 @@ services:
           property: connectionString
       - key: JWT_SECRET
         generateValue: true
-      - key: GOVERNOR_PASSWORD
-        sync: false
       - key: GROQ_API_KEY
         sync: false
       - key: DATABASE_SSL

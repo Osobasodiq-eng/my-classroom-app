@@ -22,26 +22,189 @@ const DEFAULT_DATA = () => ({
   announcements: [],
 });
 
+// Unambiguous alphabet — no 0/O or 1/I/L — since this is read aloud and
+// typed by hand far more often than any other code in the app.
+const JOIN_CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+function genJoinCode(len = 6) {
+  let out = '';
+  for (let i = 0; i < len; i++) out += JOIN_CODE_ALPHABET[crypto.randomInt(JOIN_CODE_ALPHABET.length)];
+  return out;
+}
+
+async function columnExists(table, column) {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM information_schema.columns WHERE table_name = $1 AND column_name = $2`,
+    [table, column]
+  );
+  return rows.length > 0;
+}
+
+async function tableExists(table) {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM information_schema.tables WHERE table_name = $1`,
+    [table]
+  );
+  return rows.length > 0;
+}
+
+// One-time migration from the old single-tenant schema (one global
+// app_state row, one shared GOVERNOR_PASSWORD) into the multi-tenant one
+// (many streams, each with its own Governor account and its own
+// app_state row). Runs at most once — after it runs, app_state has a
+// stream_id column and this whole function becomes a no-op forever.
+// Existing class data is preserved and wrapped into a single stream
+// rather than discarded, since this may be a live deployment with real
+// students on it.
+async function migrateToMultiTenant() {
+  const alreadyMultiTenant = await columnExists('app_state', 'stream_id');
+  if (alreadyMultiTenant) return;
+
+  const legacyHasData = await tableExists('app_state');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    let legacyStreamId = null;
+    if (legacyHasData) {
+      const { rows } = await client.query('SELECT id, data FROM app_state WHERE id = 1');
+      if (rows.length) {
+        legacyStreamId = 'stream-' + crypto.randomBytes(6).toString('hex');
+        const joinCode = genJoinCode();
+        const email = (process.env.GOVERNOR_EMAIL || 'governor@legacy.local').trim().toLowerCase();
+        // If GOVERNOR_PASSWORD is still set, the existing Governor keeps
+        // using it (now paired with GOVERNOR_EMAIL, or the fallback
+        // address above) so this migration doesn't lock anyone out of
+        // data that already exists. If it's not set, a random
+        // unguessable placeholder hash is stored instead — nobody can
+        // sign in with it, so operators must set GOVERNOR_EMAIL /
+        // GOVERNOR_PASSWORD (or create a fresh stream) and manually
+        // reassign this data, but at least the data itself isn't lost.
+        const bcrypt = require('bcryptjs');
+        const passwordHash = await bcrypt.hash(
+          process.env.GOVERNOR_PASSWORD || crypto.randomBytes(24).toString('hex'),
+          10
+        );
+        await client.query(
+          `CREATE TABLE IF NOT EXISTS streams (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            join_code TEXT UNIQUE NOT NULL,
+            governor_email TEXT UNIQUE NOT NULL,
+            governor_password_hash TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+          );`
+        );
+        await client.query(
+          'INSERT INTO streams (id, name, join_code, governor_email, governor_password_hash) VALUES ($1, $2, $3, $4, $5)',
+          [legacyStreamId, (rows[0].data && rows[0].data.className) || 'My Class', joinCode, email, passwordHash]
+        );
+        console.log('--------------------------------------------------------------');
+        console.log('MIGRATION: existing class data was moved into a new stream.');
+        console.log('  Stream id:   ' + legacyStreamId);
+        console.log('  Join code:   ' + joinCode);
+        console.log('  Governor sign-in email: ' + email);
+        if (!process.env.GOVERNOR_PASSWORD) {
+          console.log('  GOVERNOR_PASSWORD was not set — a random password was generated');
+          console.log('  and NOT recorded anywhere. Set GOVERNOR_EMAIL/GOVERNOR_PASSWORD and');
+          console.log('  restart, or ask this stream\'s Governor to sign up fresh.');
+        }
+        console.log('--------------------------------------------------------------');
+      }
+    }
+
+    // app_state: id (INTEGER, always 1) -> stream_id (TEXT, one row per stream)
+    await client.query(`ALTER TABLE app_state ADD COLUMN IF NOT EXISTS stream_id TEXT;`);
+    if (legacyStreamId) {
+      await client.query('UPDATE app_state SET stream_id = $1 WHERE id = 1', [legacyStreamId]);
+    }
+    await client.query(`ALTER TABLE app_state DROP CONSTRAINT IF EXISTS single_row;`);
+    await client.query(`ALTER TABLE app_state DROP CONSTRAINT IF EXISTS app_state_pkey;`);
+    // Any row left without a stream (shouldn't happen outside a fresh,
+    // never-seeded deploy) is removed rather than left as an orphan with
+    // no owner and no way to reach it.
+    await client.query(`DELETE FROM app_state WHERE stream_id IS NULL;`);
+    await client.query(`ALTER TABLE app_state ALTER COLUMN stream_id SET NOT NULL;`);
+    await client.query(`ALTER TABLE app_state DROP COLUMN IF EXISTS id;`);
+    await client.query(`ALTER TABLE app_state ADD PRIMARY KEY (stream_id);`);
+
+    // student_credentials: matric was globally unique; now scoped per stream
+    // so two different streams can each have their own "CS/2020/001".
+    if (await tableExists('student_credentials')) {
+      await client.query(`ALTER TABLE student_credentials ADD COLUMN IF NOT EXISTS stream_id TEXT;`);
+      if (legacyStreamId) {
+        await client.query('UPDATE student_credentials SET stream_id = $1 WHERE stream_id IS NULL', [legacyStreamId]);
+      }
+      await client.query(`DELETE FROM student_credentials WHERE stream_id IS NULL;`);
+      await client.query(`ALTER TABLE student_credentials ALTER COLUMN stream_id SET NOT NULL;`);
+      await client.query(`ALTER TABLE student_credentials DROP CONSTRAINT IF EXISTS student_credentials_pkey;`);
+      await client.query(`ALTER TABLE student_credentials ADD PRIMARY KEY (stream_id, matric);`);
+    }
+
+    // files and cgpa_records: student_id / file id are already globally
+    // unique random tokens, so no key changes are needed — stream_id is
+    // added purely as bookkeeping for future scoped queries.
+    if (await tableExists('files')) {
+      await client.query(`ALTER TABLE files ADD COLUMN IF NOT EXISTS stream_id TEXT;`);
+      if (legacyStreamId) {
+        await client.query('UPDATE files SET stream_id = $1 WHERE stream_id IS NULL', [legacyStreamId]);
+      }
+    }
+    if (await tableExists('cgpa_records')) {
+      await client.query(`ALTER TABLE cgpa_records ADD COLUMN IF NOT EXISTS stream_id TEXT;`);
+      if (legacyStreamId) {
+        await client.query('UPDATE cgpa_records SET stream_id = $1 WHERE stream_id IS NULL', [legacyStreamId]);
+      }
+    }
+
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 async function init() {
+  // app_state must exist (in whatever shape) before migrateToMultiTenant
+  // can inspect/alter it, so create the pre-migration shape first if this
+  // is a genuinely fresh database with no table at all yet.
+  if (!(await tableExists('app_state'))) {
+    await pool.query(`
+      CREATE TABLE app_state (
+        stream_id TEXT PRIMARY KEY,
+        data JSONB NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+    `);
+  }
+
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS app_state (
-      id INTEGER PRIMARY KEY DEFAULT 1,
-      data JSONB NOT NULL,
-      version INTEGER NOT NULL DEFAULT 1,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      CONSTRAINT single_row CHECK (id = 1)
+    CREATE TABLE IF NOT EXISTS streams (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      join_code TEXT UNIQUE NOT NULL,
+      governor_email TEXT UNIQUE NOT NULL,
+      governor_password_hash TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
+
+  await migrateToMultiTenant();
+
   // Kept in its own table, deliberately never inside the app_state JSON blob:
   // the Governor's saves overwrite that whole document, and if password
   // hashes lived inside it, an ordinary Governor edit could silently wipe
   // every student's password. This table is never touched by that save.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS student_credentials (
-      matric TEXT PRIMARY KEY,
+      stream_id TEXT NOT NULL REFERENCES streams(id) ON DELETE CASCADE,
+      matric TEXT NOT NULL,
       student_id TEXT NOT NULL,
       password_hash TEXT NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (stream_id, matric)
     );
   `);
   // Uploaded files (materials, course outlines) live here rather than in
@@ -51,6 +214,7 @@ async function init() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS files (
       id TEXT PRIMARY KEY,
+      stream_id TEXT REFERENCES streams(id) ON DELETE CASCADE,
       filename TEXT NOT NULL,
       mime_type TEXT,
       size_bytes INTEGER,
@@ -62,12 +226,16 @@ async function init() {
   // IF NOT EXISTS makes this safe to run again on every boot.
   await pool.query(`ALTER TABLE files ADD COLUMN IF NOT EXISTS extracted_text TEXT;`);
   await pool.query(`ALTER TABLE files ADD COLUMN IF NOT EXISTS extraction_done BOOLEAN NOT NULL DEFAULT false;`);
+  await pool.query(`ALTER TABLE files ADD COLUMN IF NOT EXISTS stream_id TEXT;`);
   // Kept separate from app_state for the same reason credentials and
   // files are: a Governor's whole-document save shouldn't be able to
   // wipe out a student's saved chat history, and this way it can't.
   // Superseded by assistant_conversations below (which supports multiple
   // saved threads per student instead of one rolling one) — left in place
   // rather than dropped, so nothing existing gets silently deleted.
+  // `identity` already embeds the stream (see auth.js/assistant.js —
+  // "governor:<streamId>" / "student:<streamId>:<studentId>"), so no
+  // separate stream_id column is needed here to keep threads isolated.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS assistant_chats (
       identity TEXT NOT NULL,
@@ -95,7 +263,8 @@ async function init() {
   // A student's own CGPA entries — self-reported grades they type in,
   // not something the Governor tracks or edits. Kept in its own table for
   // the same reason as the two above: it's the student's personal record,
-  // and a Governor save should never be able to touch it.
+  // and a Governor save should never be able to touch it. student_id is a
+  // globally unique random token, so no stream_id is needed in the key.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS cgpa_records (
       student_id TEXT PRIMARY KEY,
@@ -103,21 +272,59 @@ async function init() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
-  const { rows } = await pool.query('SELECT id FROM app_state WHERE id = 1');
-  if (rows.length === 0) {
-    await pool.query(
-      'INSERT INTO app_state (id, data, version) VALUES (1, $1, 1)',
-      [DEFAULT_DATA()]
-    );
-    console.log('app_state seeded with empty default data');
-  }
+  await pool.query(`ALTER TABLE cgpa_records ADD COLUMN IF NOT EXISTS stream_id TEXT;`);
 }
 
-async function getState() {
-  const { rows } = await pool.query('SELECT data, version FROM app_state WHERE id = 1');
+// ---------- Streams ----------
+
+async function createStream(name, email, passwordHash) {
+  const id = 'stream-' + crypto.randomBytes(6).toString('hex');
+  let joinCode = genJoinCode();
+  // Vanishingly unlikely to collide, but a unique constraint means a
+  // collision would otherwise surface as an ugly 500 — retry a couple of
+  // times with a fresh code instead.
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      await pool.query(
+        'INSERT INTO streams (id, name, join_code, governor_email, governor_password_hash) VALUES ($1, $2, $3, $4, $5)',
+        [id, name, joinCode, email, passwordHash]
+      );
+      await pool.query('INSERT INTO app_state (stream_id, data, version) VALUES ($1, $2, 1)', [id, DEFAULT_DATA()]);
+      return { id, joinCode };
+    } catch (err) {
+      if (err.code === '23505' && String(err.constraint).includes('join_code')) {
+        joinCode = genJoinCode();
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error('Could not generate a unique join code — try again.');
+}
+
+async function getStreamByEmail(email) {
+  const { rows } = await pool.query('SELECT * FROM streams WHERE governor_email = $1', [email.trim().toLowerCase()]);
+  return rows[0] || null;
+}
+
+async function getStreamByJoinCode(code) {
+  const { rows } = await pool.query('SELECT id, name, join_code FROM streams WHERE join_code = $1', [String(code).trim().toUpperCase()]);
+  return rows[0] || null;
+}
+
+async function getStreamById(id) {
+  const { rows } = await pool.query('SELECT id, name, join_code FROM streams WHERE id = $1', [id]);
+  return rows[0] || null;
+}
+
+// ---------- Per-stream class data ----------
+
+async function getState(streamId) {
+  const { rows } = await pool.query('SELECT data, version FROM app_state WHERE stream_id = $1', [streamId]);
   if (rows.length === 0) {
-    // Shouldn't happen after init(), but guard anyway.
-    await pool.query('INSERT INTO app_state (id, data, version) VALUES (1, $1, 1)', [DEFAULT_DATA()]);
+    // Shouldn't happen for a real stream (createStream seeds this row),
+    // but guard anyway rather than 500ing.
+    await pool.query('INSERT INTO app_state (stream_id, data, version) VALUES ($1, $2, 1)', [streamId, DEFAULT_DATA()]);
     return { data: DEFAULT_DATA(), version: 1 };
   }
   return { data: rows[0].data, version: rows[0].version };
@@ -125,21 +332,25 @@ async function getState() {
 
 // Optimistic concurrency: caller must supply the version they last read.
 // Returns { ok:true, version } on success, or { ok:false, current:{data,version} } on conflict.
-async function setState(newData, expectedVersion) {
+async function setState(streamId, newData, expectedVersion) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const { rows } = await client.query('SELECT version FROM app_state WHERE id = 1 FOR UPDATE');
+    const { rows } = await client.query('SELECT version FROM app_state WHERE stream_id = $1 FOR UPDATE', [streamId]);
+    if (!rows.length) {
+      await client.query('ROLLBACK');
+      throw new Error('Stream not found.');
+    }
     const currentVersion = rows[0].version;
     if (currentVersion !== expectedVersion) {
-      const { rows: cur } = await client.query('SELECT data, version FROM app_state WHERE id = 1');
+      const { rows: cur } = await client.query('SELECT data, version FROM app_state WHERE stream_id = $1', [streamId]);
       await client.query('ROLLBACK');
       return { ok: false, current: { data: cur[0].data, version: cur[0].version } };
     }
     const nextVersion = currentVersion + 1;
     await client.query(
-      'UPDATE app_state SET data = $1, version = $2, updated_at = now() WHERE id = 1',
-      [newData, nextVersion]
+      'UPDATE app_state SET data = $1, version = $2, updated_at = now() WHERE stream_id = $3',
+      [newData, nextVersion, streamId]
     );
     await client.query('COMMIT');
     return { ok: true, version: nextVersion };
@@ -156,11 +367,17 @@ async function setState(newData, expectedVersion) {
 // caller's copy), applies a single attendance record, and saves — all
 // inside one transaction so two students signing in at once can't clobber
 // each other the way a naive read-modify-write from the client could.
-async function signInAttendance(code, studentId) {
+// Scoped to a single stream's row via streamId, same as everything else —
+// a session code from one stream can never be matched against another's.
+async function signInAttendance(streamId, code, studentId) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const { rows } = await client.query('SELECT data, version FROM app_state WHERE id = 1 FOR UPDATE');
+    const { rows } = await client.query('SELECT data, version FROM app_state WHERE stream_id = $1 FOR UPDATE', [streamId]);
+    if (!rows.length) {
+      await client.query('ROLLBACK');
+      return { ok: false, status: 404, error: 'Class not found.' };
+    }
     const data = rows[0].data;
     const version = rows[0].version;
 
@@ -194,8 +411,8 @@ async function signInAttendance(code, studentId) {
     data.attendance[session.lectureId][studentId] = record;
 
     await client.query(
-      'UPDATE app_state SET data = $1, version = $2, updated_at = now() WHERE id = 1',
-      [data, version + 1]
+      'UPDATE app_state SET data = $1, version = $2, updated_at = now() WHERE stream_id = $3',
+      [data, version + 1, streamId]
     );
     await client.query('COMMIT');
     return { ok: true, record, lectureId: session.lectureId, studentId, version: version + 1 };
@@ -207,22 +424,28 @@ async function signInAttendance(code, studentId) {
   }
 }
 
-// Self-service signup. If the matric number already exists in the roster
-// (e.g. the Governor pre-loaded it), the student claims that same roster
-// row instead of creating a duplicate. If it doesn't exist yet, a new
-// roster entry is created — this is what makes signup "auto-register" the
-// student, as requested.
-async function studentSignup(matricRaw, name, email, passwordHash) {
+// Self-service signup, scoped to one stream. If the matric number already
+// exists in that stream's roster (e.g. the Governor pre-loaded it), the
+// student claims that same roster row instead of creating a duplicate. If
+// it doesn't exist yet, a new roster entry is created — this is what
+// makes signup "auto-register" the student, as requested. The same matric
+// number can exist independently in a different stream without conflict,
+// since credentials are now keyed by (stream_id, matric).
+async function studentSignup(streamId, matricRaw, name, email, passwordHash) {
   const matric = matricRaw.trim().toUpperCase();
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const existingCred = await client.query('SELECT 1 FROM student_credentials WHERE matric = $1', [matric]);
+    const existingCred = await client.query('SELECT 1 FROM student_credentials WHERE stream_id = $1 AND matric = $2', [streamId, matric]);
     if (existingCred.rows.length) {
       await client.query('ROLLBACK');
       return { ok: false, status: 409, error: 'That matric number is already registered — try signing in instead.' };
     }
-    const { rows } = await client.query('SELECT data, version FROM app_state WHERE id = 1 FOR UPDATE');
+    const { rows } = await client.query('SELECT data, version FROM app_state WHERE stream_id = $1 FOR UPDATE', [streamId]);
+    if (!rows.length) {
+      await client.query('ROLLBACK');
+      return { ok: false, status: 404, error: 'This class could not be found — check the join link.' };
+    }
     const data = rows[0].data;
     const version = rows[0].version;
 
@@ -244,12 +467,12 @@ async function studentSignup(matricRaw, name, email, passwordHash) {
     }
 
     await client.query(
-      'INSERT INTO student_credentials (matric, student_id, password_hash) VALUES ($1, $2, $3)',
-      [matric, student.id, passwordHash]
+      'INSERT INTO student_credentials (stream_id, matric, student_id, password_hash) VALUES ($1, $2, $3, $4)',
+      [streamId, matric, student.id, passwordHash]
     );
     await client.query(
-      'UPDATE app_state SET data = $1, version = $2, updated_at = now() WHERE id = 1',
-      [data, version + 1]
+      'UPDATE app_state SET data = $1, version = $2, updated_at = now() WHERE stream_id = $3',
+      [data, version + 1, streamId]
     );
     await client.query('COMMIT');
     return {
@@ -265,25 +488,25 @@ async function studentSignup(matricRaw, name, email, passwordHash) {
   }
 }
 
-async function studentCredential(matricRaw) {
+async function studentCredential(streamId, matricRaw) {
   const matric = matricRaw.trim().toUpperCase();
   const { rows } = await pool.query(
-    'SELECT student_id, password_hash FROM student_credentials WHERE matric = $1',
-    [matric]
+    'SELECT student_id, password_hash FROM student_credentials WHERE stream_id = $1 AND matric = $2',
+    [streamId, matric]
   );
   return rows[0] || null;
 }
 
-async function findStudentById(studentId) {
-  const { data } = await getState();
+async function findStudentById(streamId, studentId) {
+  const { data } = await getState(streamId);
   return (data.students || []).find((s) => s.id === studentId) || null;
 }
 
-async function saveFile(filename, mimeType, buffer) {
+async function saveFile(streamId, filename, mimeType, buffer) {
   const id = 'file-' + crypto.randomBytes(8).toString('hex');
   await pool.query(
-    'INSERT INTO files (id, filename, mime_type, size_bytes, data) VALUES ($1, $2, $3, $4, $5)',
-    [id, filename, mimeType || 'application/octet-stream', buffer.length, buffer]
+    'INSERT INTO files (id, stream_id, filename, mime_type, size_bytes, data) VALUES ($1, $2, $3, $4, $5, $6)',
+    [id, streamId, filename, mimeType || 'application/octet-stream', buffer.length, buffer]
   );
   return { id, filename, mimeType: mimeType || 'application/octet-stream', sizeBytes: buffer.length };
 }
@@ -301,16 +524,17 @@ async function getFile(id) {
 // registrations that got orphaned before removeStudent cleaned up
 // credentials on removal (or from any other stuck state) — the roster
 // row is long gone, so there's nothing left to click "Remove" on, but
-// the matric is still locked. This is the direct escape hatch for that.
-async function releaseMatric(matricRaw) {
-  const result = await pool.query('DELETE FROM student_credentials WHERE matric = $1', [matricRaw.trim().toUpperCase()]);
+// the matric is still locked. Scoped to the calling Governor's own
+// stream, so this can never touch another stream's matric numbers.
+async function releaseMatric(streamId, matricRaw) {
+  const result = await pool.query('DELETE FROM student_credentials WHERE stream_id = $1 AND matric = $2', [streamId, matricRaw.trim().toUpperCase()]);
   return result.rowCount > 0;
 }
 
-async function resetStudentPassword(studentId, passwordHash) {
+async function resetStudentPassword(streamId, studentId, passwordHash) {
   const result = await pool.query(
-    'UPDATE student_credentials SET password_hash = $1 WHERE student_id = $2',
-    [passwordHash, studentId]
+    'UPDATE student_credentials SET password_hash = $1 WHERE stream_id = $2 AND student_id = $3',
+    [passwordHash, streamId, studentId]
   );
   return result.rowCount > 0;
 }
@@ -322,12 +546,17 @@ async function resetStudentPassword(studentId, passwordHash) {
 // a Governor's save also means removing a student from the roster alone
 // does NOT free up their matric number. Without this, a removed student
 // could never sign up again with the same matric, since the orphaned
-// credential row would still match.
-async function removeStudent(studentId) {
+// credential row would still match. Scoped to streamId throughout so a
+// Governor can only ever remove students from their own stream.
+async function removeStudent(streamId, studentId) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const { rows } = await client.query('SELECT data, version FROM app_state WHERE id = 1 FOR UPDATE');
+    const { rows } = await client.query('SELECT data, version FROM app_state WHERE stream_id = $1 FOR UPDATE', [streamId]);
+    if (!rows.length) {
+      await client.query('ROLLBACK');
+      return { ok: false, removed: false };
+    }
     const data = rows[0].data;
     const version = rows[0].version;
 
@@ -337,10 +566,10 @@ async function removeStudent(studentId) {
     const removed = before !== data.students.length;
 
     await client.query(
-      'UPDATE app_state SET data = $1, version = $2, updated_at = now() WHERE id = 1',
-      [data, version + 1]
+      'UPDATE app_state SET data = $1, version = $2, updated_at = now() WHERE stream_id = $3',
+      [data, version + 1, streamId]
     );
-    await client.query('DELETE FROM student_credentials WHERE student_id = $1', [studentId]);
+    await client.query('DELETE FROM student_credentials WHERE stream_id = $1 AND student_id = $2', [streamId, studentId]);
     // Also clear by matric number directly, not just by this row's id. If
     // an older duplicate roster entry (from before duplicate-matric
     // checks existed, or from a bulk CSV import that matched loosely)
@@ -349,10 +578,10 @@ async function removeStudent(studentId) {
     // number permanently locked even though every visible roster row for
     // it is gone. Removing a student should always free up their matric.
     if (target && target.roll) {
-      await client.query('DELETE FROM student_credentials WHERE matric = $1', [target.roll.trim().toUpperCase()]);
+      await client.query('DELETE FROM student_credentials WHERE stream_id = $1 AND matric = $2', [streamId, target.roll.trim().toUpperCase()]);
     }
-    await client.query('DELETE FROM assistant_chats WHERE identity = $1', ['student:' + studentId]);
-    await client.query('DELETE FROM assistant_conversations WHERE identity = $1', ['student:' + studentId]);
+    await client.query('DELETE FROM assistant_chats WHERE identity = $1', ['student:' + streamId + ':' + studentId]);
+    await client.query('DELETE FROM assistant_conversations WHERE identity = $1', ['student:' + streamId + ':' + studentId]);
     await client.query('DELETE FROM cgpa_records WHERE student_id = $1', [studentId]);
     await client.query('COMMIT');
     return { ok: true, removed, version: version + 1 };
@@ -370,9 +599,10 @@ async function removeStudent(studentId) {
 // lock; only when something is actually past its window does it take the
 // lock and do the write. Each session is marked `finalized` once handled
 // so this is a one-time transition, not something that reprocesses every
-// request forever.
-async function finalizeExpiredSessions() {
-  const { rows } = await pool.query('SELECT data FROM app_state WHERE id = 1');
+// request forever. Scoped to one stream's row — each stream's attendance
+// windows close independently of every other stream's.
+async function finalizeExpiredSessions(streamId) {
+  const { rows } = await pool.query('SELECT data FROM app_state WHERE stream_id = $1', [streamId]);
   if (!rows.length) return;
   const now = Date.now();
   const needsWork = (rows[0].data.attendanceSessions || []).some(
@@ -383,7 +613,11 @@ async function finalizeExpiredSessions() {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const { rows: locked } = await client.query('SELECT data, version FROM app_state WHERE id = 1 FOR UPDATE');
+    const { rows: locked } = await client.query('SELECT data, version FROM app_state WHERE stream_id = $1 FOR UPDATE', [streamId]);
+    if (!locked.length) {
+      await client.query('ROLLBACK');
+      return;
+    }
     const data = locked[0].data;
     const version = locked[0].version;
     const nowInner = Date.now();
@@ -410,8 +644,8 @@ async function finalizeExpiredSessions() {
 
     if (changed) {
       await client.query(
-        'UPDATE app_state SET data = $1, version = $2, updated_at = now() WHERE id = 1',
-        [data, version + 1]
+        'UPDATE app_state SET data = $1, version = $2, updated_at = now() WHERE stream_id = $3',
+        [data, version + 1, streamId]
       );
       await client.query('COMMIT');
     } else {
@@ -454,7 +688,8 @@ async function getFileText(id) {
 const MAX_SAVED_MESSAGES = 60;
 
 // Lightweight — just enough to render a conversation list without pulling
-// every saved message for every thread.
+// every saved message for every thread. `identity` already embeds the
+// stream (see auth.js), so this can never cross a stream boundary.
 async function listConversations(identity, courseId) {
   const { rows } = await pool.query(
     'SELECT id, title, created_at, updated_at FROM assistant_conversations WHERE identity = $1 AND course_id = $2 ORDER BY updated_at DESC',
@@ -506,14 +741,21 @@ async function getCgpaRecord(studentId) {
   return rows.length ? rows[0].semesters : [];
 }
 
-async function saveCgpaRecord(studentId, semesters) {
+async function saveCgpaRecord(streamId, studentId, semesters) {
   await pool.query(
-    `INSERT INTO cgpa_records (student_id, semesters, updated_at)
-     VALUES ($1, $2, now())
+    `INSERT INTO cgpa_records (student_id, stream_id, semesters, updated_at)
+     VALUES ($1, $2, $3, now())
      ON CONFLICT (student_id)
-     DO UPDATE SET semesters = $2, updated_at = now()`,
-    [studentId, JSON.stringify(semesters)]
+     DO UPDATE SET semesters = $3, updated_at = now()`,
+    [studentId, streamId, JSON.stringify(semesters)]
   );
 }
 
-module.exports = { pool, init, getState, setState, signInAttendance, studentSignup, studentCredential, findStudentById, resetStudentPassword, removeStudent, releaseMatric, saveFile, getFile, getFileText, finalizeExpiredSessions, listConversations, getConversation, createConversation, appendToConversation, deleteConversation, getCgpaRecord, saveCgpaRecord, DEFAULT_DATA };
+module.exports = {
+  pool, init, DEFAULT_DATA,
+  createStream, getStreamByEmail, getStreamByJoinCode, getStreamById,
+  getState, setState, signInAttendance, studentSignup, studentCredential, findStudentById,
+  resetStudentPassword, removeStudent, releaseMatric, saveFile, getFile, getFileText,
+  finalizeExpiredSessions, listConversations, getConversation, createConversation,
+  appendToConversation, deleteConversation, getCgpaRecord, saveCgpaRecord,
+};

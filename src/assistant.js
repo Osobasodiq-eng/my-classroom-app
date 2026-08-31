@@ -117,13 +117,16 @@ async function askAssistant(req, res) {
     return res.status(400).json({ error: 'Pick a course and ask a question.' });
   }
 
-  const identity = req.auth.role === 'governor' ? 'governor' : 'student:' + req.auth.studentId;
+  // Identity embeds the stream so one Governor's or student's saved
+  // conversations, rate-limit bucket, etc. can never mix with another
+  // stream's, even though this process serves every stream at once.
+  const identity = req.auth.role === 'governor' ? 'governor:' + req.streamId : 'student:' + req.streamId + ':' + req.auth.studentId;
   if (!checkRateLimit(identity)) {
     return res.status(429).json({ error: "You've asked a lot of questions this hour — try again a bit later." });
   }
 
   try {
-    const { data } = await db.getState();
+    const { data } = await db.getState(req.streamId);
     const course = (data.courses || []).find((c) => c.id === courseId);
     if (!course) return res.status(404).json({ error: 'Course not found.' });
     const materials = (data.materials || []).filter((m) => m.courseId === courseId);
@@ -225,7 +228,7 @@ async function askAssistant(req, res) {
 async function listConversations(req, res) {
   const { courseId } = req.query || {};
   if (!courseId) return res.status(400).json({ error: 'courseId is required.' });
-  const identity = req.auth.role === 'governor' ? 'governor' : 'student:' + req.auth.studentId;
+  const identity = req.auth.role === 'governor' ? 'governor:' + req.streamId : 'student:' + req.streamId + ':' + req.auth.studentId;
   try {
     const conversations = await db.listConversations(identity, courseId);
     res.json({ conversations });
@@ -236,7 +239,7 @@ async function listConversations(req, res) {
 }
 
 async function getConversationHandler(req, res) {
-  const identity = req.auth.role === 'governor' ? 'governor' : 'student:' + req.auth.studentId;
+  const identity = req.auth.role === 'governor' ? 'governor:' + req.streamId : 'student:' + req.streamId + ':' + req.auth.studentId;
   try {
     const conversation = await db.getConversation(identity, req.params.id);
     if (!conversation) return res.status(404).json({ error: 'Conversation not found.' });
@@ -248,7 +251,7 @@ async function getConversationHandler(req, res) {
 }
 
 async function deleteConversationHandler(req, res) {
-  const identity = req.auth.role === 'governor' ? 'governor' : 'student:' + req.auth.studentId;
+  const identity = req.auth.role === 'governor' ? 'governor:' + req.streamId : 'student:' + req.streamId + ':' + req.auth.studentId;
   try {
     const removed = await db.deleteConversation(identity, req.params.id);
     res.json({ ok: true, removed });

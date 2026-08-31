@@ -378,10 +378,37 @@
   let importSummary = "";
   let tickTimer = null;
   let loginOpen = false;
+  let loginMode = "signin"; // or "create" (create a new stream)
   let loginError = "";
   let studentAuthOpen = false;
   let studentAuthMode = "signin"; // or "signup"
   let studentAuthError = "";
+  let joinCodeError = "";
+
+  // ---------- STREAM (multi-tenant) ----------
+  // The stream a Governor or student is currently in. Every API call that
+  // needs to know which class's data to touch is scoped to this. For a
+  // signed-in Governor or student it's set from their login/signup
+  // response; for a not-yet-authenticated student it's set by resolving
+  // a join code, before any account exists.
+  let currentStream = null;
+  try{ currentStream = JSON.parse(localStorage.getItem("currentStream") || "null"); }catch(e){ currentStream = null; }
+  function setCurrentStream(stream){
+    currentStream = stream || null;
+    if(stream) localStorage.setItem("currentStream", JSON.stringify(stream));
+    else localStorage.removeItem("currentStream");
+  }
+  async function resolveJoinCode(code){
+    try{
+      const res = await fetch("/api/streams/by-code/" + encodeURIComponent(code.trim().toUpperCase()));
+      const json = await res.json();
+      if(!res.ok) return { ok:false, error: json.error || "That join code wasn't found." };
+      setCurrentStream({ id: json.streamId, name: json.name, joinCode: json.joinCode });
+      return { ok:true };
+    }catch(err){
+      return { ok:false, error:"Could not reach the server — check your connection." };
+    }
+  }
 
   // ---------- AUTH ----------
   let authToken = localStorage.getItem("governorToken") || null;
@@ -407,6 +434,7 @@
   }
   function studentLogout(){
     setStudentSession(null, null);
+    setCurrentStream(null);
     myIdentityId = null;
     role = "student";
     assistantMessages = [];
@@ -434,9 +462,24 @@
 
   // ---------- STORAGE ----------
 
+  // Which stream's data to load: a signed-in Governor or student's token
+  // already carries their streamId server-side, so sending it as a
+  // Bearer token is enough — no separate stream id needs to travel with
+  // every request. Only when nobody is signed in yet (a fresh join-code
+  // resolution, or the check-in kiosk before login) does the stream need
+  // to be named explicitly, via ?stream=.
+  function stateFetchOptions(){
+    if(authToken) return { headers: { "Authorization": "Bearer " + authToken } };
+    if(studentToken) return { headers: { "Authorization": "Bearer " + studentToken } };
+    if(currentStream) return { url: "?stream=" + encodeURIComponent(currentStream.id) };
+    return null;
+  }
+
   async function loadData(){
+    const opts = stateFetchOptions();
+    if(!opts){ data = defaultData(); return; }
     try{
-      const res = await fetch("/api/state");
+      const res = await fetch("/api/state" + (opts.url || ""), opts.headers ? { headers: opts.headers } : undefined);
       if(!res.ok) throw new Error("bad status " + res.status);
       const json = await res.json();
       data = Object.assign(defaultData(), json.data);
@@ -482,20 +525,39 @@
     }
   }
 
-  async function governorLogin(password){
+  async function governorLogin(email, password){
     const res = await fetch("/api/auth/login", {
       method: "POST",
       headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({password}),
+      body: JSON.stringify({email, password}),
     });
     const json = await res.json();
     if(!res.ok) return {ok:false, error: json.error || "Sign-in failed."};
     setAuthToken(json.token);
+    setCurrentStream(json.stream);
     return {ok:true};
+  }
+
+  // Any Governor can sign up and create their own stream — this is the
+  // self-serve path, no invitation or shared password needed. Returns
+  // the new stream's join code/link so it can be shown immediately and
+  // shared with students.
+  async function governorSignup(streamName, email, password){
+    const res = await fetch("/api/auth/governor-signup", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({streamName, email, password}),
+    });
+    const json = await res.json();
+    if(!res.ok) return {ok:false, error: json.error || "Could not create your stream."};
+    setAuthToken(json.token);
+    setCurrentStream(json.stream);
+    return {ok:true, stream: json.stream};
   }
 
   function governorLogout(){
     setAuthToken(null);
+    setCurrentStream(null);
     role = "student";
     myIdentityId = null;
     assistantMessages = [];
@@ -705,8 +767,17 @@
     return text.split(/\r?\n/).map(l => l.trim()).filter(Boolean).map(line => line.split(",").map(c => c.trim().replace(/^"|"$/g,"")));
   }
 
+  // Check-in links now carry the stream's join code alongside the session
+  // code (joinCode.sessionCode) — a fresh device with no session yet still
+  // needs to know which stream's data to load before it can even show the
+  // countdown, let alone let someone sign up to check in.
   function checkinUrl(code){
-    return location.origin + location.pathname + location.search + "#checkin=" + code;
+    const joinPart = currentStream ? currentStream.joinCode + "." : "";
+    return location.origin + location.pathname + location.search + "#checkin=" + joinPart + code;
+  }
+
+  function streamJoinUrl(joinCode){
+    return location.origin + location.pathname + "#join=" + joinCode;
   }
 
   async function copyText(text){
@@ -1625,10 +1696,12 @@
 
   function renderStudentAuthModal(){
     if(!studentAuthOpen) return "";
+    if(!currentStream) return renderJoinCodeModal();
     const isSignup = studentAuthMode === "signup";
     return '<div class="drawer-overlay" id="studentAuthOverlay"><div class="drawer" style="width:min(360px,92vw);">' +
       '<button class="close" id="closeStudentAuthDrawer">×</button>' +
       '<h2>' + (isSignup ? "Create your account" : "Student sign-in") + '</h2>' +
+      '<p class="hint" style="margin-bottom:4px;">Joining <strong>' + escapeHtml(currentStream.name) + '</strong> · <a href="#" id="studentAuthWrongClass">not your class?</a></p>' +
       '<p class="hint" style="margin-bottom:16px;">' + (isSignup
         ? "Sign up with your matric number and a password you'll remember. This registers you on the Governor's roster automatically."
         : "Sign in with your matric number and password to see your attendance and check in to class.") + '</p>' +
@@ -1646,17 +1719,37 @@
       '</div></div>';
   }
 
+  // Shown instead of the sign-in/sign-up form until a class join code has
+  // been resolved — students find their stream this way (a code or a
+  // shared link), since there's no directory of streams to browse.
+  function renderJoinCodeModal(){
+    return '<div class="drawer-overlay" id="joinCodeOverlay"><div class="drawer" style="width:min(360px,92vw);">' +
+      '<button class="close" id="closeJoinCodeDrawer">×</button>' +
+      '<h2>Find your class</h2>' +
+      '<p class="hint" style="margin-bottom:16px;">Enter the join code your Governor shared with you.</p>' +
+      '<form id="joinCodeForm">' +
+        '<div class="field"><label>Join code</label><input required type="text" name="code" autofocus autocapitalize="characters" style="text-transform:uppercase; letter-spacing:2px;" maxlength="8" /></div>' +
+        (joinCodeError ? '<p class="hint" style="color:var(--rose); margin-bottom:10px;">' + escapeHtml(joinCodeError) + '</p>' : '') +
+        '<button class="btn" type="submit" style="width:100%;">Continue</button>' +
+      '</form>' +
+      '</div></div>';
+  }
+
   async function submitStudentAuth(fd){
+    if(!currentStream){ return { ok:false, error:"Enter your class join code first." }; }
     const matric = fd.get("matric");
     const password = fd.get("password");
     const isSignup = studentAuthMode === "signup";
     const url = isSignup ? "/api/auth/student-signup" : "/api/auth/student-login";
-    const body = isSignup ? { matric, name: fd.get("name"), email: fd.get("email"), password } : { matric, password };
+    const body = isSignup
+      ? { joinCode: currentStream.joinCode, matric, name: fd.get("name"), email: fd.get("email"), password }
+      : { joinCode: currentStream.joinCode, matric, password };
     try{
       const res = await fetch(url, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
       const json = await res.json();
       if(!res.ok) return { ok:false, error: json.error || "Something went wrong." };
       setStudentSession(json.token, json.student);
+      if(json.stream) setCurrentStream(json.stream);
       return { ok:true };
     }catch(err){
       return { ok:false, error:"Could not reach the server — check your connection." };
@@ -1667,23 +1760,45 @@
 
   function renderLoginModal(){
     if(!loginOpen) return "";
-    return '<div class="drawer-overlay" id="loginDrawerOverlay"><div class="drawer" style="width:min(360px,92vw);">' +
+    const isCreate = loginMode === "create";
+    return '<div class="drawer-overlay" id="loginDrawerOverlay"><div class="drawer" style="width:min(380px,92vw);">' +
       '<button class="close" id="closeLoginDrawer">×</button>' +
-      '<h2>Governor sign-in</h2>' +
-      '<p class="hint" style="margin-bottom:16px;">Enter the Governor password to add courses, take attendance, and post materials or notices. Students never need this.</p>' +
+      '<h2>' + (isCreate ? "Create your stream" : "Governor sign-in") + '</h2>' +
+      '<p class="hint" style="margin-bottom:16px;">' + (isCreate
+        ? "Set up a new, fully independent class — your own roster, courses, and students. You'll get a join code to share right after."
+        : "Sign in to add courses, take attendance, and post materials or notices for your stream. Students never need this.") + '</p>' +
       '<form id="loginForm">' +
-        '<div class="field"><label>Password</label><input required type="password" name="password" autofocus /></div>' +
+        (isCreate ? '<div class="field"><label>Stream / class name</label><input required type="text" name="streamName" autofocus placeholder="e.g. MBA Cohort 2026" /></div>' : '') +
+        '<div class="field"><label>Email</label><input required type="email" name="email"' + (isCreate ? '' : ' autofocus') + ' /></div>' +
+        '<div class="field"><label>Password</label><input required type="password" name="password" minlength="6" /></div>' +
         (loginError ? '<p class="hint" style="color:var(--rose); margin-bottom:10px;">' + escapeHtml(loginError) + '</p>' : '') +
-        '<button class="btn" type="submit" style="width:100%;">Sign in</button>' +
+        '<button class="btn" type="submit" style="width:100%;">' + (isCreate ? "Create stream" : "Sign in") + '</button>' +
       '</form>' +
+      '<p class="hint" style="margin-top:14px; text-align:center;">' + (isCreate
+        ? 'Already have a stream? <a href="#" id="loginModeSwitch">Sign in instead</a>'
+        : 'New Governor? <a href="#" id="loginModeSwitch">Create a stream</a>') + '</p>' +
       '</div></div>';
   }
 
   // ---------- CHECK-IN KIOSK ----------
 
+  // Returns just the session code — parseCheckinHash() (below) is what
+  // pulls the join code out too, since resolving *which stream* has to
+  // happen before this session code means anything.
   function getCheckinCode(){
-    const m = location.hash.match(/^#checkin=([A-Za-z0-9]+)/);
-    return m ? m[1].toUpperCase() : null;
+    const parsed = parseCheckinHash();
+    return parsed ? parsed.sessionCode : null;
+  }
+  function parseCheckinHash(){
+    const m = location.hash.match(/^#checkin=([A-Za-z0-9]+)(?:\.([A-Za-z0-9]+))?/);
+    if(!m) return null;
+    // Two-part links (new format) carry the join code; bare single-code
+    // links (old format, from before multi-tenancy) have no way to name
+    // a stream, so they only work if one is already resolved (e.g. the
+    // Governor generating/previewing the link from inside their own
+    // already-loaded stream).
+    if(m[2]) return { joinCode: m[1].toUpperCase(), sessionCode: m[2].toUpperCase() };
+    return { joinCode: null, sessionCode: m[1].toUpperCase() };
   }
 
   // ---------- AUTH GATE ----------
@@ -1695,17 +1810,19 @@
   function renderAuthGate(){
     return '<div class="auth-gate"><div class="kiosk-card">' +
       '<span class="mark">Roll Call</span>' +
-      '<h1>' + escapeHtml(data.className || "Sign in") + '</h1>' +
-      '<p class="sub">Sign in to continue — as the Governor, or as a student.</p>' +
+      '<h1>' + escapeHtml(currentStream ? currentStream.name : "Roll Call") + '</h1>' +
+      '<p class="sub">' + (currentStream
+        ? 'Sign in or sign up for this class, or open as its Governor.'
+        : 'Every class here is its own independent stream. Sign in as a Governor to run one, or enter a join code to find yours.') + '</p>' +
       '<button class="btn" type="button" id="gateGovernorBtn">Sign in as Governor</button>' +
-      '<button class="btn ghost" type="button" id="gateStudentBtn">Sign in as Student</button>' +
+      '<button class="btn ghost" type="button" id="gateStudentBtn">' + (currentStream ? "Continue as Student" : "I have a class join code") + '</button>' +
       '</div></div>';
   }
   function attachAuthGateEvents(){
     const gateGovernorBtn = document.getElementById("gateGovernorBtn");
-    if(gateGovernorBtn) gateGovernorBtn.addEventListener("click", () => { loginOpen = true; loginError = ""; render(); });
+    if(gateGovernorBtn) gateGovernorBtn.addEventListener("click", () => { loginOpen = true; loginMode = "signin"; loginError = ""; render(); });
     const gateStudentBtn = document.getElementById("gateStudentBtn");
-    if(gateStudentBtn) gateStudentBtn.addEventListener("click", () => { studentAuthOpen = true; studentAuthMode = "signin"; studentAuthError = ""; render(); });
+    if(gateStudentBtn) gateStudentBtn.addEventListener("click", () => { studentAuthOpen = true; studentAuthMode = "signin"; studentAuthError = ""; joinCodeError = ""; render(); });
   }
 
   function renderKiosk(code){
@@ -2457,28 +2574,54 @@
     if(closeLoginDrawer) closeLoginDrawer.addEventListener("click", () => { loginOpen = false; render(); });
     const loginDrawerOverlay = document.getElementById("loginDrawerOverlay");
     if(loginDrawerOverlay) loginDrawerOverlay.addEventListener("click", (e) => { if(e.target === loginDrawerOverlay){ loginOpen = false; render(); } });
+    const loginModeSwitch = document.getElementById("loginModeSwitch");
+    if(loginModeSwitch) loginModeSwitch.addEventListener("click", (e) => { e.preventDefault(); loginMode = loginMode === "create" ? "signin" : "create"; loginError = ""; render(); });
     const loginForm = document.getElementById("loginForm");
     if(loginForm){
       loginForm.addEventListener("submit", async (e) => {
         e.preventDefault();
         const fd = new FormData(loginForm);
         const submitBtn = loginForm.querySelector('button[type="submit"]');
-        submitBtn.disabled = true; submitBtn.textContent = "Signing in…";
-        const result = await governorLogin(fd.get("password"));
+        const isCreate = loginMode === "create";
+        submitBtn.disabled = true; submitBtn.textContent = isCreate ? "Creating…" : "Signing in…";
+        const result = isCreate
+          ? await governorSignup(fd.get("streamName"), fd.get("email"), fd.get("password"))
+          : await governorLogin(fd.get("email"), fd.get("password"));
         if(result.ok){
           loginOpen = false; loginError = ""; role = "governor"; myIdentityId = null;
           await loadData(); render();
+          if(isCreate && result.stream){
+            alert("Your stream is ready! Share this join code with students: " + result.stream.joinCode + "\n\nOr this link:\n" + streamJoinUrl(result.stream.joinCode));
+          }
         } else {
           loginError = result.error; render();
         }
       });
     }
 
-    // Student auth (sign in / sign up)
+    // Student auth (join-code lookup, then sign in / sign up)
     const closeStudentAuthDrawer = document.getElementById("closeStudentAuthDrawer");
     if(closeStudentAuthDrawer) closeStudentAuthDrawer.addEventListener("click", () => { studentAuthOpen = false; render(); });
+    const closeJoinCodeDrawer = document.getElementById("closeJoinCodeDrawer");
+    if(closeJoinCodeDrawer) closeJoinCodeDrawer.addEventListener("click", () => { studentAuthOpen = false; render(); });
     const studentAuthOverlay = document.getElementById("studentAuthOverlay");
     if(studentAuthOverlay) studentAuthOverlay.addEventListener("click", (e) => { if(e.target === studentAuthOverlay){ studentAuthOpen = false; render(); } });
+    const joinCodeOverlay = document.getElementById("joinCodeOverlay");
+    if(joinCodeOverlay) joinCodeOverlay.addEventListener("click", (e) => { if(e.target === joinCodeOverlay){ studentAuthOpen = false; render(); } });
+    const joinCodeForm = document.getElementById("joinCodeForm");
+    if(joinCodeForm){
+      joinCodeForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const fd = new FormData(joinCodeForm);
+        const submitBtn = joinCodeForm.querySelector('button[type="submit"]');
+        submitBtn.disabled = true; submitBtn.textContent = "Looking up…";
+        const result = await resolveJoinCode(fd.get("code"));
+        if(result.ok){ joinCodeError = ""; render(); }
+        else { joinCodeError = result.error; render(); }
+      });
+    }
+    const studentAuthWrongClass = document.getElementById("studentAuthWrongClass");
+    if(studentAuthWrongClass) studentAuthWrongClass.addEventListener("click", (e) => { e.preventDefault(); setCurrentStream(null); joinCodeError = ""; render(); });
     const studentAuthSwitch = document.getElementById("studentAuthSwitch");
     if(studentAuthSwitch) studentAuthSwitch.addEventListener("click", (e) => { e.preventDefault(); studentAuthMode = studentAuthMode === "signup" ? "signin" : "signup"; studentAuthError = ""; render(); });
     const studentAuthForm = document.getElementById("studentAuthForm");
@@ -2522,9 +2665,33 @@
   let nameSaveTimer;
   classNameInput.addEventListener("input", () => { data.className = classNameInput.value; clearTimeout(nameSaveTimer); nameSaveTimer = setTimeout(saveData, 500); });
 
-  window.addEventListener("hashchange", render);
+  // The URL can name a stream two ways: a check-in link (#checkin=JOIN.SESSION)
+  // or a plain join link (#join=JOIN, e.g. shared by a Governor right after
+  // creating their stream). Both need their join code resolved into
+  // currentStream *before* loadData()/render() can show anything real —
+  // this runs that resolution, then loads data for whichever stream ends
+  // up current (freshly resolved, or already saved from a prior sign-in).
+  async function ensureStreamForRoute(){
+    const checkin = parseCheckinHash();
+    const joinMatch = location.hash.match(/^#join=([A-Za-z0-9]+)/);
+    const wantedJoinCode = (checkin && checkin.joinCode) || (joinMatch && joinMatch[1].toUpperCase());
+    if(wantedJoinCode && (!currentStream || currentStream.joinCode !== wantedJoinCode)){
+      await resolveJoinCode(wantedJoinCode);
+    }
+    if(joinMatch && currentStream){
+      // A plain #join= link's only job is to resolve the stream — once
+      // it has, drop it from the URL and open the student sign-in/sign-up
+      // flow (or, if already signed in to a different role, just leave
+      // the app on the auth gate for this stream).
+      history.replaceState(null, "", location.pathname + location.search);
+      if(!authToken && !studentToken){ studentAuthOpen = true; studentAuthMode = "signup"; }
+    }
+  }
+
+  window.addEventListener("hashchange", async () => { await ensureStreamForRoute(); await loadData(); render(); });
 
   (async function init(){
+    await ensureStreamForRoute();
     await loadData();
     render();
   })();
