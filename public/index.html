@@ -263,6 +263,7 @@
           <button data-role="student">Student</button>
         </div>
       </div>
+      <button class="btn ghost small" id="shareClassBtn" style="display:none;">Share class</button>
       <button class="btn ghost small" id="signOutBtn" style="display:none;">Sign out</button>
     </div>
   </header>
@@ -384,6 +385,8 @@
   let studentAuthMode = "signin"; // or "signup"
   let studentAuthError = "";
   let joinCodeError = "";
+  let shareOpen = false;
+  let shareCopied = "";
 
   // ---------- STREAM (multi-tenant) ----------
   // The stream a Governor or student is currently in. Every API call that
@@ -1735,6 +1738,30 @@
       '</div></div>';
   }
 
+  // Always-available for the Governor — signup only shows the join
+  // code/link once, in a one-time alert, which is easy to lose track of.
+  // This is the persistent place to find it again.
+  function renderShareModal(){
+    if(!shareOpen || !currentStream) return "";
+    const link = streamJoinUrl(currentStream.joinCode);
+    return '<div class="drawer-overlay" id="shareOverlay"><div class="drawer" style="width:min(380px,92vw);">' +
+      '<button class="close" id="closeShareDrawer">×</button>' +
+      '<h2>Share ' + escapeHtml(currentStream.name) + '</h2>' +
+      '<p class="hint" style="margin-bottom:16px;">Give students either of these — both take them straight to your class.</p>' +
+      '<div class="field"><label>Join code</label>' +
+        '<div style="display:flex; gap:8px;">' +
+          '<input readonly type="text" id="shareCodeInput" value="' + escapeHtml(currentStream.joinCode) + '" style="flex:1; letter-spacing:2px; font-weight:600;" />' +
+          '<button class="btn ghost small" type="button" id="copyCodeBtn">Copy</button>' +
+        '</div></div>' +
+      '<div class="field"><label>Join link</label>' +
+        '<div style="display:flex; gap:8px;">' +
+          '<input readonly type="text" id="shareLinkInput" value="' + escapeHtml(link) + '" style="flex:1;" />' +
+          '<button class="btn ghost small" type="button" id="copyLinkBtn">Copy</button>' +
+        '</div></div>' +
+      (shareCopied ? '<p class="hint" style="color:var(--sage,inherit);">' + escapeHtml(shareCopied) + ' copied.</p>' : '') +
+      '</div></div>';
+  }
+
   async function submitStudentAuth(fd){
     if(!currentStream){ return { ok:false, error:"Enter your class join code first." }; }
     const matric = fd.get("matric");
@@ -1996,12 +2023,15 @@
       notificationHighlight = null;
     }
 
-    drawerHost.innerHTML = renderStudentDrawer() + renderCourseDrawer() + renderLoginModal() + renderStudentAuthModal();
+    drawerHost.innerHTML = renderStudentDrawer() + renderCourseDrawer() + renderLoginModal() + renderStudentAuthModal() + renderShareModal();
 
     const signOutBtn = document.getElementById("signOutBtn");
     if(role === "governor" && authToken){ signOutBtn.style.display = "inline"; signOutBtn.textContent = "Sign out"; }
     else if(role === "student" && studentToken){ signOutBtn.style.display = "inline"; signOutBtn.textContent = "Sign out"; }
     else signOutBtn.style.display = "none";
+
+    const shareClassBtn = document.getElementById("shareClassBtn");
+    if(shareClassBtn) shareClassBtn.style.display = (role === "governor" && authToken && currentStream) ? "inline" : "none";
 
     attachEvents();
   }
@@ -2622,6 +2652,29 @@
     }
     const studentAuthWrongClass = document.getElementById("studentAuthWrongClass");
     if(studentAuthWrongClass) studentAuthWrongClass.addEventListener("click", (e) => { e.preventDefault(); setCurrentStream(null); joinCodeError = ""; render(); });
+
+    // Share-class panel (Governor: view/copy join code + link any time)
+    const closeShareDrawer = document.getElementById("closeShareDrawer");
+    if(closeShareDrawer) closeShareDrawer.addEventListener("click", () => { shareOpen = false; render(); });
+    const shareOverlay = document.getElementById("shareOverlay");
+    if(shareOverlay) shareOverlay.addEventListener("click", (e) => { if(e.target === shareOverlay){ shareOpen = false; render(); } });
+    async function copyToClipboard(text){
+      try{ await navigator.clipboard.writeText(text); return true; }
+      catch(err){
+        // Clipboard API needs a secure context/permission that isn't always
+        // available (e.g. an embedded preview) — a manual select+copy
+        // still gets the value into the user's clipboard via the browser's
+        // native copy command as a fallback.
+        const input = document.createElement("textarea");
+        input.value = text; document.body.appendChild(input); input.select();
+        try{ document.execCommand("copy"); document.body.removeChild(input); return true; }
+        catch(err2){ document.body.removeChild(input); return false; }
+      }
+    }
+    const copyCodeBtn = document.getElementById("copyCodeBtn");
+    if(copyCodeBtn) copyCodeBtn.addEventListener("click", async () => { if(await copyToClipboard(currentStream.joinCode)){ shareCopied = "Join code"; render(); } });
+    const copyLinkBtn = document.getElementById("copyLinkBtn");
+    if(copyLinkBtn) copyLinkBtn.addEventListener("click", async () => { if(await copyToClipboard(streamJoinUrl(currentStream.joinCode))){ shareCopied = "Join link"; render(); } });
     const studentAuthSwitch = document.getElementById("studentAuthSwitch");
     if(studentAuthSwitch) studentAuthSwitch.addEventListener("click", (e) => { e.preventDefault(); studentAuthMode = studentAuthMode === "signup" ? "signin" : "signup"; studentAuthError = ""; render(); });
     const studentAuthForm = document.getElementById("studentAuthForm");
@@ -2660,6 +2713,8 @@
     if(role === "governor") governorLogout();
     else studentLogout();
   });
+  const shareClassBtnEl = document.getElementById("shareClassBtn");
+  if(shareClassBtnEl) shareClassBtnEl.addEventListener("click", () => { shareOpen = true; shareCopied = ""; render(); });
 
   const classNameInput = document.getElementById("classNameInput");
   let nameSaveTimer;
