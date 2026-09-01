@@ -117,6 +117,47 @@ Same codebase, switched by one environment variable:
   account, on the main service. The backoffice can look, and can reset
   access, but doesn't reach in and change class data itself.
 
+### Live class calls & recording
+
+Voice/video calls run on Daily.co, embedded via their Prebuilt UI (a
+plain `<iframe>` — no separate video SDK bundled into the app). This is
+a deliberate build-vs-buy choice: running your own WebRTC signaling/SFU
+infrastructure for this is a large, ongoing commitment, and Daily's
+Prebuilt already ships the call UI (tiles, mute, screen share, and a
+Record button for the room owner) rather than needing to hand-build one.
+
+- **`POST /api/calls`** (Governor, approved stream only) creates a Daily
+  room and a `call_rooms` row, and returns a meeting token for the
+  Governor to join as room owner.
+- **`POST /api/calls/:id/token`** issues a join token for anyone else in
+  that same stream — Governor or student, checked by `req.streamId`
+  matching the room's stream, same as everywhere else in this app.
+- **Recording is started/stopped from inside the call** (the Record
+  button Daily's Prebuilt UI shows to the owner when a room has
+  `enable_recording: 'cloud'` set — see `src/daily.js`), not a separate
+  API route here.
+- **`POST /api/webhooks/daily`** is Daily's own notification channel —
+  it tells this app when a recording starts, finishes, or fails, and
+  that's how a `call_recordings` row gets created and later marked
+  `ready`. Verified with an HMAC signature (`DAILY_WEBHOOK_SECRET`) so an
+  arbitrary caller can't forge a "recording ready" event.
+- **Recording files themselves stay on Daily's storage** — this app only
+  ever stores a `daily_recording_id` pointer, fetching a fresh, temporary
+  playback link from Daily's API on each request (`GET
+  /api/recordings/:id/link`), since Daily's own download links expire
+  after a few hours.
+- **Written against Daily's documented API without a live account to
+  test against.** The first real call with a real `DAILY_API_KEY` is the
+  actual test — `src/daily.js` is the file to check first if something
+  doesn't match Daily's current API shape.
+- **Optional, like `GROQ_API_KEY`:** without `DAILY_API_KEY`/
+  `DAILY_DOMAIN` set, the server still boots (with a console warning),
+  and `/api/calls` routes fail with a clear error instead.
+- **Consent:** both starting and joining a call show a plain confirmation
+  ("this call may be recorded") before proceeding. This is a first pass,
+  not a substitute for checking what a real consent notice needs to say
+  for an institutional deployment.
+
 ### Approval gate on new streams
 
 Self-serve signup means anyone can spin up a stream — which is the

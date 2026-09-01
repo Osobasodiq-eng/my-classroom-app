@@ -294,6 +294,41 @@ async function init() {
       at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
+
+  // A live class call — the Daily.co room itself, not the recording.
+  // daily_room_name is the name Daily knows it by, which is what the
+  // recording webhook uses to find its way back to a stream (recordings
+  // don't otherwise carry a stream_id from Daily's side).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS call_rooms (
+      id TEXT PRIMARY KEY,
+      stream_id TEXT NOT NULL REFERENCES streams(id) ON DELETE CASCADE,
+      daily_room_name TEXT NOT NULL UNIQUE,
+      title TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      ended_at TIMESTAMPTZ
+    );
+  `);
+  // The recording's actual audio/video file lives on Daily's storage, not
+  // here — same principle as uploaded files never living inline in the
+  // app_state document. This row is a pointer: daily_recording_id is
+  // permanent, but Daily's direct download links expire after a few
+  // hours, so a fresh one is fetched from Daily's API on each playback
+  // request (see getRecordingAccessLink in src/daily.js) rather than
+  // stored once and going stale.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS call_recordings (
+      id TEXT PRIMARY KEY,
+      room_id TEXT NOT NULL REFERENCES call_rooms(id) ON DELETE CASCADE,
+      stream_id TEXT NOT NULL REFERENCES streams(id) ON DELETE CASCADE,
+      daily_recording_id TEXT UNIQUE,
+      status TEXT NOT NULL DEFAULT 'processing',
+      duration_seconds INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      ready_at TIMESTAMPTZ
+    );
+  `);
 }
 
 // ---------- Streams ----------
@@ -891,6 +926,90 @@ async function saveCgpaRecord(streamId, studentId, semesters) {
   );
 }
 
+// ---------- Live class calls ----------
+
+async function createCallRoom(streamId, dailyRoomName, title) {
+  const id = 'call-' + crypto.randomBytes(6).toString('hex');
+  await pool.query(
+    'INSERT INTO call_rooms (id, stream_id, daily_room_name, title) VALUES ($1, $2, $3, $4)',
+    [id, streamId, dailyRoomName, title || null]
+  );
+  return id;
+}
+
+// Scoped by streamId so a Governor can never fetch or end a call that
+// belongs to a different stream, even if they somehow guessed its id.
+async function getCallRoom(streamId, id) {
+  const { rows } = await pool.query('SELECT * FROM call_rooms WHERE id = $1 AND stream_id = $2', [id, streamId]);
+  return rows[0] || null;
+}
+
+// Unscoped lookup by Daily's own room name — this is the one place a
+// call is found *without* already knowing its stream, because the only
+// thing the recording webhook has to go on is the name Daily gave the
+// room. Never exposed to a route directly; only used internally to
+// resolve which stream a webhook event belongs to.
+async function getCallRoomByDailyName(dailyRoomName) {
+  const { rows } = await pool.query('SELECT * FROM call_rooms WHERE daily_room_name = $1', [dailyRoomName]);
+  return rows[0] || null;
+}
+
+async function endCallRoom(streamId, id) {
+  const result = await pool.query(
+    `UPDATE call_rooms SET status = 'ended', ended_at = now() WHERE id = $1 AND stream_id = $2 AND status = 'active'`,
+    [id, streamId]
+  );
+  return result.rowCount > 0;
+}
+
+async function listCallRooms(streamId, limit = 30) {
+  const { rows } = await pool.query(
+    `SELECT * FROM call_rooms WHERE stream_id = $1 ORDER BY (status = 'active') DESC, started_at DESC LIMIT $2`,
+    [streamId, limit]
+  );
+  return rows;
+}
+
+// Created the moment a recording is known to have started (from Daily's
+// "recording.started" webhook) so it shows up as "processing" right
+// away, rather than only appearing once fully processed minutes later.
+async function createRecordingPlaceholder(roomId, streamId, dailyRecordingId) {
+  const id = 'rec-' + crypto.randomBytes(6).toString('hex');
+  await pool.query(
+    `INSERT INTO call_recordings (id, room_id, stream_id, daily_recording_id, status)
+     VALUES ($1, $2, $3, $4, 'processing')
+     ON CONFLICT (daily_recording_id) DO NOTHING`,
+    [id, roomId, streamId, dailyRecordingId]
+  );
+  return id;
+}
+
+async function markRecordingReady(dailyRecordingId, durationSeconds) {
+  await pool.query(
+    `UPDATE call_recordings SET status = 'ready', duration_seconds = $1, ready_at = now() WHERE daily_recording_id = $2`,
+    [durationSeconds || null, dailyRecordingId]
+  );
+}
+
+async function markRecordingFailed(dailyRecordingId) {
+  await pool.query(`UPDATE call_recordings SET status = 'failed' WHERE daily_recording_id = $1`, [dailyRecordingId]);
+}
+
+async function listRecordingsForRoom(streamId, roomId) {
+  const { rows } = await pool.query(
+    'SELECT * FROM call_recordings WHERE stream_id = $1 AND room_id = $2 ORDER BY created_at DESC',
+    [streamId, roomId]
+  );
+  return rows;
+}
+
+// Scoped by streamId — the one check standing between "any recording id"
+// and "only this stream's own recordings" for the playback route.
+async function getRecording(streamId, id) {
+  const { rows } = await pool.query('SELECT * FROM call_recordings WHERE id = $1 AND stream_id = $2', [id, streamId]);
+  return rows[0] || null;
+}
+
 module.exports = {
   pool, init, DEFAULT_DATA,
   createStream, getStreamByEmail, getStreamByJoinCode, getStreamById,
@@ -900,4 +1019,7 @@ module.exports = {
   appendToConversation, deleteConversation, getCgpaRecord, saveCgpaRecord,
   getStreamForAdmin, listStreamsForAdmin, adminResetGovernorPassword, regenerateJoinCode,
   deleteStreamCascade, logAdminAction, listAdminAuditLog, setStreamStatus,
+  createCallRoom, getCallRoom, getCallRoomByDailyName, endCallRoom, listCallRooms,
+  createRecordingPlaceholder, markRecordingReady, markRecordingFailed,
+  listRecordingsForRoom, getRecording,
 };

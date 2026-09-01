@@ -313,6 +313,10 @@
         <svg width="16" height="16" viewBox="0 0 24 24"><path d="M12 3a7 7 0 0 0-7 7c0 2.2 1 4.2 2.7 5.5V19l2.8-1.5c.5.1 1 .1 1.5.1a7 7 0 0 0 0-14z" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round"/><circle cx="9.5" cy="10" r="1" fill="currentColor"/><circle cx="14.5" cy="10" r="1" fill="currentColor"/></svg>
         Ask AI
       </div>
+      <div class="navbtn" data-tab="calls">
+        <svg width="16" height="16" viewBox="0 0 24 24"><path d="M4 5h11v14H4z" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round"/><path d="M15 10l5-3v10l-5-3z" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round"/></svg>
+        Live Call
+      </div>
       <div class="navdivider"></div>
       <div class="navbtn" data-tab="courses">
         <svg width="16" height="16" viewBox="0 0 24 24"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4H20v14H6.5A2.5 2.5 0 0 0 4 20.5z" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round"/><path d="M4 6.5v14" stroke="currentColor" stroke-width="1.6" fill="none"/></svg>
@@ -343,6 +347,14 @@
   let assistantConversationsLoadedFor = null;
   let assistantShowHistory = false;
   let notificationHighlight = null; // {tab, targetId} — set when a notification is clicked, consumed once by the target tab
+
+  // ---------- Live class calls ----------
+  let callRooms = []; // this stream's calls, most recent/active first — from GET /api/calls
+  let callsLoaded = false;
+  let activeCall = null; // {roomId, url, token} while actually in a call; null otherwise
+  let callBusy = false;
+  let callError = "";
+  let recordingLinksLoading = {}; // roomId -> bool, so a "Play" click shows its own loading state
   let cgpaSemesters = [];
   let cgpaLoadedForStudent = null;
 
@@ -1697,6 +1709,170 @@
     }
   }
 
+  // ---------- Live class calls ----------
+
+  async function loadCallRooms(){
+    const token = role === "governor" ? authToken : studentToken;
+    if(!token) return;
+    try{
+      const res = await fetch("/api/calls", { headers: { "Authorization": "Bearer " + token } });
+      const json = await res.json();
+      if(res.ok) callRooms = json.rooms;
+      callsLoaded = true;
+    }catch(e){
+      // leave callRooms as-is; the panel already shows callError for
+      // action failures, and a silent list-refresh failure isn't worth
+      // interrupting the view over
+    }
+  }
+
+  function renderCalls(){
+    if(activeCall){
+      const src = activeCall.url + "?t=" + encodeURIComponent(activeCall.token);
+      return '<div class="panel" style="padding:0; overflow:hidden;">' +
+        '<div style="display:flex; align-items:center; justify-content:space-between; padding:14px 20px; border-bottom:1px solid var(--rule); flex-wrap:wrap; gap:8px;">' +
+          '<strong>Live class call</strong>' +
+          '<div style="display:flex; gap:8px;">' +
+            (role === "governor" ? '<button class="btn ghost small" id="endCallBtn">End call for everyone</button>' : '') +
+            '<button class="btn ghost small" id="leaveCallBtn">Leave call</button>' +
+          '</div>' +
+        '</div>' +
+        '<iframe id="callFrame" src="' + escapeHtml(src) + '" allow="camera; microphone; fullscreen; display-capture; autoplay" style="width:100%; height:70vh; border:none; display:block;"></iframe>' +
+      '</div>';
+    }
+
+    const active = callRooms.find(r => r.status === "active");
+    const past = callRooms.filter(r => r.status !== "active");
+
+    let html = '<div class="panel">';
+    html += '<h2>Live Call</h2>';
+    if(callError) html += '<p class="hint" style="color:var(--rose);">' + escapeHtml(callError) + '</p>';
+    if(active){
+      html += '<p class="hint" style="margin-bottom:12px;">A class call is live right now' + (active.title ? ' — ' + escapeHtml(active.title) : '') + '.</p>';
+      html += '<button class="btn" type="button" id="joinCallBtn" data-room="' + escapeHtml(active.id) + '"' + (callBusy ? ' disabled' : '') + '>' + (callBusy ? "Joining…" : "Join call") + '</button>';
+      if(role === "governor") html += ' <button class="btn ghost" type="button" id="endCallBtnList" data-room="' + escapeHtml(active.id) + '" style="margin-left:8px;">End call</button>';
+    } else if(role === "governor"){
+      html += '<p class="hint" style="margin-bottom:12px;">Start a live voice/video call for this stream. Recording is started from inside the call and, once it\u2019s ready, shows up below for everyone in this stream.</p>';
+      html += '<button class="btn" type="button" id="startCallBtn"' + (callBusy ? ' disabled' : '') + '>' + (callBusy ? "Starting…" : "Start class call") + '</button>';
+    } else {
+      html += '<p class="hint">No live call right now \u2014 check back when your Governor starts one.</p>';
+    }
+    html += '</div>';
+
+    if(past.length){
+      html += '<div class="panel"><h2>Past calls</h2>' +
+        past.map(r => renderPastCallRow(r)).join('<div style="height:1px; background:var(--rule); margin:14px 0;"></div>') +
+        '</div>';
+    }
+    return html;
+  }
+
+  function renderPastCallRow(r){
+    const recs = r._recordings; // populated lazily by attachCallsEvents/loadRecordingsFor
+    let recHtml;
+    if(recs === undefined){
+      recHtml = '<p class="hint">Loading recordings…</p>';
+    } else if(!recs.length){
+      recHtml = '<p class="hint">No recording for this call.</p>';
+    } else {
+      recHtml = recs.map(rec => {
+        if(rec.status === "ready"){
+          return '<button class="btn ghost small" type="button" data-play-recording="' + escapeHtml(rec.id) + '">' +
+            (recordingLinksLoading[rec.id] ? "Loading…" : "▶ Play recording" + (rec.duration_seconds ? " (" + Math.round(rec.duration_seconds/60) + " min)" : "")) +
+            '</button>';
+        }
+        if(rec.status === "failed") return '<span class="hint" style="color:var(--rose);">Recording failed to process.</span>';
+        return '<span class="hint">Recording processing\u2026</span>';
+      }).join(" ");
+    }
+    return '<div style="padding:6px 0;">' +
+      '<strong>' + escapeHtml(r.title || "Class call") + '</strong> ' +
+      '<span class="hint">' + fmtDate(r.started_at) + (r.ended_at ? " – " + fmtDate(r.ended_at) : "") + '</span>' +
+      '<div style="margin-top:6px;">' + recHtml + '</div>' +
+    '</div>';
+  }
+
+  async function loadRecordingsFor(room){
+    const token = role === "governor" ? authToken : studentToken;
+    try{
+      const res = await fetch("/api/calls/" + encodeURIComponent(room.id) + "/recordings", { headers: { "Authorization": "Bearer " + token } });
+      const json = await res.json();
+      room._recordings = res.ok ? json.recordings : [];
+    }catch(e){
+      room._recordings = [];
+    }
+    render();
+  }
+
+  function attachCallsEvents(){
+    const startCallBtn = document.getElementById("startCallBtn");
+    if(startCallBtn) startCallBtn.addEventListener("click", async () => {
+      if(!confirm("This call may be recorded. By starting it, you confirm participants will be informed. Continue?")) return;
+      callBusy = true; callError = ""; render();
+      try{
+        const res = await fetch("/api/calls", { method:"POST", headers:{"Content-Type":"application/json","Authorization":"Bearer "+authToken}, body: JSON.stringify({}) });
+        const json = await res.json();
+        if(!res.ok) throw new Error(json.error || "Could not start the call.");
+        activeCall = { roomId: json.roomId, url: json.url, token: json.token };
+      }catch(e){ callError = e.message; }
+      callBusy = false; render();
+    });
+
+    const joinCallBtn = document.getElementById("joinCallBtn");
+    if(joinCallBtn) joinCallBtn.addEventListener("click", async () => {
+      if(!confirm("This call may be recorded. Join anyway?")) return;
+      const roomId = joinCallBtn.getAttribute("data-room");
+      const token = role === "governor" ? authToken : studentToken;
+      callBusy = true; callError = ""; render();
+      try{
+        const name = role === "student" && studentInfo ? studentInfo.name : undefined;
+        const res = await fetch("/api/calls/" + encodeURIComponent(roomId) + "/token", { method:"POST", headers:{"Content-Type":"application/json","Authorization":"Bearer "+token}, body: JSON.stringify({ name }) });
+        const json = await res.json();
+        if(!res.ok) throw new Error(json.error || "Could not join the call.");
+        activeCall = { roomId, url: json.url, token: json.token };
+      }catch(e){ callError = e.message; }
+      callBusy = false; render();
+    });
+
+    const leaveCallBtn = document.getElementById("leaveCallBtn");
+    if(leaveCallBtn) leaveCallBtn.addEventListener("click", () => { activeCall = null; loadCallRooms().then(render); });
+
+    async function endCall(roomId){
+      if(!confirm("End this call for everyone?")) return;
+      callError = "";
+      try{
+        const res = await fetch("/api/calls/" + encodeURIComponent(roomId) + "/end", { method:"POST", headers:{"Authorization":"Bearer "+authToken} });
+        const json = await res.json();
+        if(!res.ok) throw new Error(json.error || "Could not end the call.");
+        activeCall = null;
+      }catch(e){ callError = e.message; }
+      await loadCallRooms(); render();
+    }
+    const endCallBtn = document.getElementById("endCallBtn");
+    if(endCallBtn) endCallBtn.addEventListener("click", () => endCall(activeCall.roomId));
+    const endCallBtnList = document.getElementById("endCallBtnList");
+    if(endCallBtnList) endCallBtnList.addEventListener("click", () => endCall(endCallBtnList.getAttribute("data-room")));
+
+    document.querySelectorAll("[data-play-recording]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const id = btn.getAttribute("data-play-recording");
+        const token = role === "governor" ? authToken : studentToken;
+        recordingLinksLoading[id] = true; render();
+        try{
+          const res = await fetch("/api/recordings/" + encodeURIComponent(id) + "/link", { headers: { "Authorization": "Bearer " + token } });
+          const json = await res.json();
+          if(!res.ok) throw new Error(json.error || "Could not load the recording.");
+          window.open(json.url, "_blank", "noopener");
+        }catch(e){ callError = e.message; }
+        recordingLinksLoading[id] = false; render();
+      });
+    });
+
+    // Past calls' recordings are loaded lazily, one call each, only the
+    // first time they're shown — not refetched on every render.
+    callRooms.filter(r => r.status !== "active" && r._recordings === undefined).forEach(loadRecordingsFor);
+  }
+
   async function uploadFile(file){
     const fd = new FormData();
     fd.append("file", file);
@@ -2107,6 +2283,11 @@
     else if(activeTab === "roster") main.innerHTML = renderRoster();
     else if(activeTab === "mine") main.innerHTML = renderMyAttendance();
     else if(activeTab === "assistant") { main.innerHTML = renderAssistant(); attachAssistantEvents(); }
+    else if(activeTab === "calls") {
+      main.innerHTML = renderCalls();
+      attachCallsEvents();
+      if(!callsLoaded && !activeCall) loadCallRooms().then(render);
+    }
 
     if(notificationHighlight && notificationHighlight.tab === activeTab){
       const target = notificationHighlight.targetId;

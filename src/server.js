@@ -1,10 +1,12 @@
 require('dotenv').config();
 const path = require('path');
+const crypto = require('crypto');
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const bcrypt = require('bcryptjs');
 const db = require('./db');
+const daily = require('./daily');
 const {
   governorSignup, login, requireGovernor, resolveJoinCode, getMyStream,
   studentSignup, studentLogin, requireStudent, resetStudentPassword, requireAnyAuth,
@@ -35,10 +37,22 @@ if (missing.length) {
   console.error('Copy .env.example to .env and fill these in (see README.md).');
   process.exit(1);
 }
+// Live class calls are optional — without DAILY_API_KEY, /api/calls
+// routes will fail with a clear error rather than the whole server
+// refusing to boot, the same way GROQ_API_KEY works for the study
+// assistant.
+if (!ADMIN_ONLY && (!process.env.DAILY_API_KEY || !process.env.DAILY_DOMAIN)) {
+  console.warn('DAILY_API_KEY/DAILY_DOMAIN not set — live class calls are disabled until both are set.');
+}
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: '2mb' }));
+// verify captures the raw request bytes alongside the parsed body — the
+// Daily webhook route needs those exact bytes (not a re-serialized copy)
+// to check its HMAC signature, and this is the only point in the
+// pipeline where they're still available before express.json consumes
+// the stream.
+app.use(express.json({ limit: '2mb', verify: (req, res, buf) => { req.rawBody = buf; } }));
 
 app.get('/api/health', (req, res) => res.json({ ok: true, mode: ADMIN_ONLY ? 'admin' : 'app' }));
 
@@ -285,6 +299,128 @@ if (ADMIN_ONLY) {
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: 'Could not save your CGPA record.' });
+    }
+  });
+
+  // ---------- Live class calls ----------
+  // Governor and student, in a Governor's own stream, join the SAME
+  // Daily.co room — a room's name is unguessable and unique to a single
+  // stream's call, and every route below re-checks stream ownership
+  // before handing out a token or a recording link. Recording itself is
+  // controlled from inside the call UI (see src/daily.js), not a
+  // separate route here.
+
+  app.post('/api/calls', requireGovernor, requireApprovedStream, async (req, res) => {
+    const dailyRoomName = 'stream-' + req.streamId.replace(/^stream-/, '') + '-' + Date.now().toString(36);
+    try {
+      await daily.createRoom(dailyRoomName);
+      const roomId = await db.createCallRoom(req.streamId, dailyRoomName, req.body && req.body.title);
+      const token = await daily.createMeetingToken(dailyRoomName, { isOwner: true, userName: 'Governor' });
+      res.json({ roomId, dailyRoomName, url: `https://${process.env.DAILY_DOMAIN}.daily.co/${dailyRoomName}`, token });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: err.message || 'Could not start the call.' });
+    }
+  });
+
+  app.post('/api/calls/:id/token', requireAnyAuth, async (req, res) => {
+    try {
+      const room = await db.getCallRoom(req.streamId, req.params.id);
+      if (!room || room.status !== 'active') return res.status(404).json({ error: 'This call is not active.' });
+      const isOwner = req.auth.role === 'governor';
+      const userName = isOwner ? 'Governor' : (req.body && req.body.name) || 'Student';
+      const token = await daily.createMeetingToken(room.daily_room_name, { isOwner, userName });
+      res.json({ url: `https://${process.env.DAILY_DOMAIN}.daily.co/${room.daily_room_name}`, token });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: err.message || 'Could not join the call.' });
+    }
+  });
+
+  app.post('/api/calls/:id/end', requireGovernor, requireApprovedStream, async (req, res) => {
+    try {
+      const room = await db.getCallRoom(req.streamId, req.params.id);
+      if (!room) return res.status(404).json({ error: 'Call not found.' });
+      await db.endCallRoom(req.streamId, req.params.id);
+      await daily.deleteRoom(room.daily_room_name); // ejects everyone still in it
+      res.json({ ok: true });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: 'Could not end the call.' });
+    }
+  });
+
+  app.get('/api/calls', requireAnyAuth, async (req, res) => {
+    try {
+      const rooms = await db.listCallRooms(req.streamId);
+      res.json({ rooms });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: 'Could not load calls.' });
+    }
+  });
+
+  app.get('/api/calls/:id/recordings', requireAnyAuth, async (req, res) => {
+    try {
+      const room = await db.getCallRoom(req.streamId, req.params.id);
+      if (!room) return res.status(404).json({ error: 'Call not found.' });
+      const recordings = await db.listRecordingsForRoom(req.streamId, req.params.id);
+      res.json({ recordings });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: 'Could not load recordings.' });
+    }
+  });
+
+  // Fetches a fresh, temporary playback link every time — Daily's own
+  // links expire after a few hours, so nothing permanent is ever stored
+  // or handed out here.
+  app.get('/api/recordings/:id/link', requireAnyAuth, async (req, res) => {
+    try {
+      const recording = await db.getRecording(req.streamId, req.params.id);
+      if (!recording) return res.status(404).json({ error: 'Recording not found.' });
+      if (recording.status !== 'ready') return res.status(409).json({ error: 'This recording is still processing.' });
+      const url = await daily.getRecordingAccessLink(recording.daily_recording_id);
+      res.json({ url });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: 'Could not load the recording.' });
+    }
+  });
+
+  // Daily calls this — not a browser — whenever a recording starts,
+  // finishes processing, or fails. Verified with an HMAC signature so an
+  // arbitrary caller can't forge a "recording ready" event; the exact
+  // header/algorithm here is written against Daily's documented webhook
+  // format but hasn't been exercised against a live account yet — this
+  // is the first thing to check against Daily's current docs once
+  // DAILY_WEBHOOK_SECRET is actually configured from their dashboard.
+  app.post('/api/webhooks/daily', async (req, res) => {
+    const secret = process.env.DAILY_WEBHOOK_SECRET;
+    if (secret) {
+      const signature = req.headers['x-webhook-signature'];
+      const expected = crypto.createHmac('sha256', secret).update(req.rawBody).digest('hex');
+      if (!signature || signature !== expected) {
+        return res.status(401).json({ error: 'Invalid webhook signature.' });
+      }
+    }
+    try {
+      const event = req.body;
+      const roomName = event && event.payload && event.payload.room_name;
+      const room = roomName ? await db.getCallRoomByDailyName(roomName) : null;
+      if (room) {
+        if (event.type === 'recording.started') {
+          await db.createRecordingPlaceholder(room.id, room.stream_id, event.payload.recording_id);
+        } else if (event.type === 'recording.ready-to-download') {
+          await db.markRecordingReady(event.payload.recording_id, event.payload.duration);
+        } else if (event.type === 'recording.error') {
+          await db.markRecordingFailed(event.payload.recording_id);
+        }
+      }
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('Daily webhook error:', err);
+      res.status(500).json({ error: 'Webhook processing failed.' });
     }
   });
 
