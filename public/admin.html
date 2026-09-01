@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex, nofollow" />
+<title>Roll Call — Admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #1c3327; --panel: #24402f; --panel-raised: #2a4a37;
+    --chalk: #f1eee2; --chalk-dim: #aebcae; --chalk-faint: #7f9084;
+    --brass: #c9a667; --brass-dim: #8f7a4d; --rose: #c1666b; --sage: #7fa98f;
+    --rule: rgba(241,238,226,0.14); --rule-strong: rgba(241,238,226,0.28);
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{ background:var(--bg); color:var(--chalk); font-family:'Inter',sans-serif; min-height:100vh; }
+  .wrap{ max-width:1100px; margin:0 auto; padding:28px 24px 80px; }
+  .mark{ font-family:'Fraunces',serif; font-weight:700; font-size:14px; color:var(--brass); letter-spacing:.14em; text-transform:uppercase; border:1px solid var(--brass-dim); border-radius:3px; padding:3px 8px; }
+  h1{ font-family:'Fraunces',serif; font-size:26px; margin:10px 0 4px; }
+  h2{ font-family:'Fraunces',serif; font-size:19px; margin:0 0 10px; }
+  .sub{ color:var(--chalk-dim); font-size:13px; margin:0 0 20px; }
+  .warn{ color:var(--rose); font-size:12.5px; margin:0 0 24px; padding:10px 12px; border:1px solid rgba(193,102,107,0.4); border-radius:8px; background:rgba(193,102,107,0.08); }
+  .panel{ background:var(--panel); border:1px solid var(--rule); border-radius:12px; padding:20px; margin-bottom:20px; }
+  .field{ margin-bottom:14px; }
+  .field label{ display:block; font-size:11px; text-transform:uppercase; letter-spacing:.1em; color:var(--chalk-faint); margin-bottom:6px; }
+  .field input{ width:100%; background:var(--panel-raised); border:1px solid var(--rule-strong); border-radius:7px; padding:9px 11px; color:var(--chalk); font-family:'Inter',sans-serif; font-size:14px; }
+  .field input:focus{ outline:none; border-color:var(--brass); }
+  .btn{ background:var(--brass); color:#20301f; border:none; border-radius:7px; padding:9px 16px; font-weight:600; font-size:13.5px; cursor:pointer; }
+  .btn:disabled{ opacity:.6; cursor:default; }
+  .btn.ghost{ background:transparent; border:1px solid var(--rule-strong); color:var(--chalk); }
+  .btn.danger{ background:var(--rose); color:#2a1214; }
+  .btn.small{ padding:6px 11px; font-size:12.5px; }
+  .error{ color:var(--rose); font-size:13px; margin:0 0 12px; }
+  .ok{ color:var(--sage); font-size:13px; margin:0 0 12px; }
+  table{ width:100%; border-collapse:collapse; font-size:13.5px; }
+  th{ text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--chalk-faint); padding:8px 10px; border-bottom:1px solid var(--rule-strong); }
+  td{ padding:10px; border-bottom:1px solid var(--rule); vertical-align:top; }
+  tr.clickable{ cursor:pointer; }
+  tr.clickable:hover td{ background:rgba(241,238,226,0.03); }
+  .mono{ font-family:'IBM Plex Mono',monospace; letter-spacing:.03em; }
+  .pill{ display:inline-block; font-family:'IBM Plex Mono',monospace; font-size:12px; background:var(--panel-raised); border:1px solid var(--rule-strong); border-radius:5px; padding:2px 8px; letter-spacing:.05em; }
+  .back{ color:var(--chalk-dim); text-decoration:none; font-size:13px; }
+  .back:hover{ color:var(--chalk); }
+  .row{ display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
+  .actions{ display:flex; gap:8px; flex-wrap:wrap; }
+  .stat{ display:inline-block; margin-right:22px; }
+  .stat b{ font-family:'Fraunces',serif; font-size:20px; display:block; }
+  .stat span{ font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--chalk-faint); }
+  .kv{ display:grid; grid-template-columns:140px 1fr; gap:6px 14px; font-size:13.5px; margin-bottom:4px; }
+  .kv div:nth-child(odd){ color:var(--chalk-faint); }
+  .log-entry{ font-size:12.5px; color:var(--chalk-dim); padding:6px 0; border-bottom:1px solid var(--rule); }
+  .log-entry .action{ color:var(--chalk); font-weight:600; }
+  ul.plain{ margin:0; padding-left:18px; font-size:13.5px; }
+  ul.plain li{ margin-bottom:4px; }
+</style>
+</head>
+<body>
+<div class="wrap" id="root"></div>
+<script>
+(function(){
+  "use strict";
+  let token = null;
+  try{ token = sessionStorage.getItem("adminToken"); }catch(e){ token = null; }
+  // Deliberately sessionStorage, not localStorage — this token can read
+  // across every stream, so it's gone the moment the tab closes rather
+  // than sitting around on a shared machine.
+  let loginError = "";
+  let view = "list"; // "list" | "stream" | "log"
+  let streams = [];
+  let listError = "";
+  let current = null; // { stream, data, version }
+  let currentError = "";
+  let actionMsg = "";
+  let actionError = "";
+  let auditLog = [];
+
+  function escapeHtml(s){
+    return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  }
+  function fmtDate(iso){
+    if(!iso) return "—";
+    try{ return new Date(iso).toLocaleString(); }catch(e){ return iso; }
+  }
+
+  async function api(path, opts){
+    opts = opts || {};
+    const headers = Object.assign({}, opts.headers, token ? {"Authorization":"Bearer "+token} : {});
+    const res = await fetch("/api/admin"+path, Object.assign({}, opts, { headers }));
+    let json = {};
+    try{ json = await res.json(); }catch(e){}
+    if(res.status === 401){ setToken(null); render(); throw new Error(json.error || "Session expired."); }
+    if(!res.ok) throw new Error(json.error || ("Request failed (" + res.status + ")"));
+    return json;
+  }
+
+  function setToken(t){
+    token = t;
+    if(t) sessionStorage.setItem("adminToken", t);
+    else sessionStorage.removeItem("adminToken");
+  }
+
+  async function loadStreams(){
+    listError = "";
+    try{
+      const json = await api("/streams");
+      streams = json.streams;
+    }catch(e){ listError = e.message; }
+    render();
+  }
+
+  async function openStream(id){
+    view = "stream"; current = null; currentError = ""; actionMsg = ""; actionError = "";
+    render();
+    try{
+      current = await api("/streams/"+encodeURIComponent(id));
+    }catch(e){ currentError = e.message; }
+    render();
+  }
+
+  async function loadAuditLog(){
+    view = "log";
+    render();
+    try{
+      const json = await api("/audit-log");
+      auditLog = json.entries;
+    }catch(e){ listError = e.message; }
+    render();
+  }
+
+  function renderLogin(){
+    return '<span class="mark">Roll Call</span>' +
+      '<h1>Admin</h1>' +
+      '<p class="sub">Single hardcoded account, configured via server environment variables. This is the one place that can see across every stream — every view and action here is written to an audit log.</p>' +
+      '<div class="panel" style="max-width:360px;">' +
+        '<form id="loginForm">' +
+          '<div class="field"><label>Email</label><input required type="email" name="email" autofocus /></div>' +
+          '<div class="field"><label>Password</label><input required type="password" name="password" /></div>' +
+          (loginError ? '<p class="error">' + escapeHtml(loginError) + '</p>' : '') +
+          '<button class="btn" type="submit" style="width:100%;">Sign in</button>' +
+        '</form>' +
+      '</div>';
+  }
+
+  function renderList(){
+    let rows = "";
+    if(listError){
+      rows = '<tr><td colspan="6"><p class="error" style="margin:0;">' + escapeHtml(listError) + '</p></td></tr>';
+    } else if(!streams.length){
+      rows = '<tr><td colspan="6" class="sub">No streams yet.</td></tr>';
+    } else {
+      rows = streams.map(s =>
+        '<tr class="clickable" data-open="' + escapeHtml(s.id) + '">' +
+          '<td>' + escapeHtml(s.name) + '</td>' +
+          '<td class="mono">' + escapeHtml(s.governor_email) + '</td>' +
+          '<td><span class="pill">' + escapeHtml(s.join_code) + '</span></td>' +
+          '<td>' + s.student_count + '</td>' +
+          '<td>' + s.course_count + '</td>' +
+          '<td class="sub">' + fmtDate(s.last_activity) + '</td>' +
+        '</tr>'
+      ).join("");
+    }
+    return '<div class="row">' +
+        '<div><span class="mark">Roll Call</span><h1 style="margin-top:10px;">Admin</h1><p class="sub" style="margin-bottom:0;">' + streams.length + ' stream' + (streams.length===1?"":"s") + '</p></div>' +
+        '<div class="actions">' +
+          '<button class="btn ghost small" id="viewLogBtn">Audit log</button>' +
+          '<button class="btn ghost small" id="refreshBtn">Refresh</button>' +
+          '<button class="btn ghost small" id="logoutBtn">Sign out</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="panel">' +
+        '<table><thead><tr><th>Stream</th><th>Governor email</th><th>Join code</th><th>Students</th><th>Courses</th><th>Last activity</th></tr></thead>' +
+        '<tbody>' + rows + '</tbody></table>' +
+      '</div>';
+  }
+
+  function renderLog(){
+    let rows = auditLog.length
+      ? auditLog.map(e => '<div class="log-entry"><span class="action">' + escapeHtml(e.action) + '</span>' + (e.stream_id ? ' · ' + escapeHtml(e.stream_id) : '') + (e.detail ? ' · ' + escapeHtml(e.detail) : '') + '<br>' + fmtDate(e.at) + '</div>').join("")
+      : '<p class="sub">Nothing logged yet.</p>';
+    return '<a class="back" href="#" id="backToList">&larr; All streams</a>' +
+      '<h1 style="margin-top:14px;">Audit log</h1>' +
+      '<p class="sub">Every admin view and action, most recent first.</p>' +
+      (listError ? '<p class="error">' + escapeHtml(listError) + '</p>' : '') +
+      '<div class="panel">' + rows + '</div>';
+  }
+
+  function renderStream(){
+    if(currentError){
+      return '<a class="back" href="#" id="backToList">&larr; All streams</a>' +
+        '<p class="error" style="margin-top:14px;">' + escapeHtml(currentError) + '</p>';
+    }
+    if(!current) return '<a class="back" href="#" id="backToList">&larr; All streams</a><p class="sub" style="margin-top:14px;">Loading…</p>';
+    const s = current.stream, data = current.data;
+    return '<a class="back" href="#" id="backToList">&larr; All streams</a>' +
+      '<div class="row" style="margin-top:14px;">' +
+        '<div><h1 style="margin-bottom:2px;">' + escapeHtml(s.name) + '</h1><p class="sub" style="margin-bottom:0;" class="mono">' + escapeHtml(s.id) + '</p></div>' +
+      '</div>' +
+      (actionMsg ? '<p class="ok">' + escapeHtml(actionMsg) + '</p>' : '') +
+      (actionError ? '<p class="error">' + escapeHtml(actionError) + '</p>' : '') +
+      '<div class="panel">' +
+        '<div class="kv">' +
+          '<div>Governor email</div><div class="mono">' + escapeHtml(s.governor_email) + '</div>' +
+          '<div>Join code</div><div><span class="pill">' + escapeHtml(s.join_code) + '</span></div>' +
+          '<div>Created</div><div>' + fmtDate(s.created_at) + '</div>' +
+        '</div>' +
+        '<div style="margin-top:16px;" class="actions">' +
+          '<button class="btn ghost small" id="resetPwBtn">Reset Governor password</button>' +
+          '<button class="btn ghost small" id="regenCodeBtn">Regenerate join code</button>' +
+          '<button class="btn danger small" id="deleteStreamBtn">Delete stream</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="panel">' +
+        '<div class="stat"><b>' + (data.students||[]).length + '</b><span>Students</span></div>' +
+        '<div class="stat"><b>' + (data.courses||[]).length + '</b><span>Courses</span></div>' +
+        '<div class="stat"><b>' + (data.lectures||[]).length + '</b><span>Lectures</span></div>' +
+        '<div class="stat"><b>' + (data.materials||[]).length + '</b><span>Materials</span></div>' +
+        '<div class="stat"><b>' + (data.assignments||[]).length + '</b><span>Assignments</span></div>' +
+      '</div>' +
+      '<div class="panel">' +
+        '<h2>Roster</h2>' +
+        (data.students && data.students.length
+          ? '<table><thead><tr><th>Matric</th><th>Name</th><th>Email</th></tr></thead><tbody>' +
+              data.students.map(st => '<tr><td class="mono">' + escapeHtml(st.roll) + '</td><td>' + escapeHtml(st.name) + '</td><td class="mono">' + escapeHtml(st.email||"—") + '</td></tr>').join("") +
+            '</tbody></table>'
+          : '<p class="sub">No students yet.</p>') +
+      '</div>' +
+      '<div class="panel">' +
+        '<h2>Courses</h2>' +
+        (data.courses && data.courses.length
+          ? '<ul class="plain">' + data.courses.map(c => '<li>' + escapeHtml(c.name) + (c.code ? ' <span class="sub">(' + escapeHtml(c.code) + ')</span>' : '') + '</li>').join("") + '</ul>'
+          : '<p class="sub">No courses yet.</p>') +
+      '</div>';
+  }
+
+  function render(){
+    const root = document.getElementById("root");
+    if(!token){ root.innerHTML = renderLogin(); attachLoginEvents(); return; }
+    if(view === "stream") root.innerHTML = renderStream();
+    else if(view === "log") root.innerHTML = renderLog();
+    else root.innerHTML = renderList();
+    attachEvents();
+  }
+
+  function attachLoginEvents(){
+    const form = document.getElementById("loginForm");
+    if(!form) return;
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const btn = form.querySelector('button[type="submit"]');
+      btn.disabled = true; btn.textContent = "Signing in…";
+      try{
+        const res = await fetch("/api/admin/login", {
+          method: "POST", headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ email: fd.get("email"), password: fd.get("password") }),
+        });
+        const json = await res.json();
+        if(!res.ok) throw new Error(json.error || "Sign-in failed.");
+        setToken(json.token);
+        loginError = "";
+        await loadStreams();
+      }catch(err){
+        loginError = err.message; render();
+      }
+    });
+  }
+
+  function attachEvents(){
+    const logoutBtn = document.getElementById("logoutBtn");
+    if(logoutBtn) logoutBtn.addEventListener("click", () => { setToken(null); view = "list"; render(); });
+    const refreshBtn = document.getElementById("refreshBtn");
+    if(refreshBtn) refreshBtn.addEventListener("click", loadStreams);
+    const viewLogBtn = document.getElementById("viewLogBtn");
+    if(viewLogBtn) viewLogBtn.addEventListener("click", loadAuditLog);
+    const backToList = document.getElementById("backToList");
+    if(backToList) backToList.addEventListener("click", (e) => { e.preventDefault(); view = "list"; loadStreams(); });
+    document.querySelectorAll("[data-open]").forEach(tr => {
+      tr.addEventListener("click", () => openStream(tr.getAttribute("data-open")));
+    });
+
+    const resetPwBtn = document.getElementById("resetPwBtn");
+    if(resetPwBtn) resetPwBtn.addEventListener("click", async () => {
+      const pw = prompt("New password for this stream's Governor (at least 6 characters):");
+      if(!pw) return;
+      actionMsg = ""; actionError = "";
+      try{
+        await api("/streams/" + encodeURIComponent(current.stream.id) + "/reset-governor-password", {
+          method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ newPassword: pw }),
+        });
+        actionMsg = "Password reset. Share the new password with the Governor directly.";
+      }catch(e){ actionError = e.message; }
+      render();
+    });
+    const regenCodeBtn = document.getElementById("regenCodeBtn");
+    if(regenCodeBtn) regenCodeBtn.addEventListener("click", async () => {
+      if(!confirm("Regenerate this stream's join code? The old code will stop working immediately.")) return;
+      actionMsg = ""; actionError = "";
+      try{
+        const json = await api("/streams/" + encodeURIComponent(current.stream.id) + "/regenerate-join-code", { method: "POST" });
+        current.stream.join_code = json.joinCode;
+        actionMsg = "New join code: " + json.joinCode + " — share it with the Governor.";
+      }catch(e){ actionError = e.message; }
+      render();
+    });
+    const deleteStreamBtn = document.getElementById("deleteStreamBtn");
+    if(deleteStreamBtn) deleteStreamBtn.addEventListener("click", async () => {
+      const typed = prompt('This permanently deletes "' + current.stream.name + '" and everything in it — roster, attendance, materials, credentials. This cannot be undone.\n\nType the stream name to confirm:');
+      if(typed !== current.stream.name) { if(typed !== null) alert("Name didn't match — nothing was deleted."); return; }
+      actionMsg = ""; actionError = "";
+      try{
+        await api("/streams/" + encodeURIComponent(current.stream.id), { method: "DELETE" });
+        view = "list";
+        await loadStreams();
+      }catch(e){ actionError = e.message; render(); }
+    });
+  }
+
+  if(token) loadStreams(); else render();
+})();
+</script>
+</body>
+</html>

@@ -21,3 +21,30 @@ services:
         sync: false
       - key: DATABASE_SSL
         value: "true"
+
+  # Same codebase, same database, deliberately different service — this
+  # is what gives the admin backoffice its own onrender.com URL instead
+  # of a path on the main app's domain. ADMIN_ONLY=true is what switches
+  # server.js into serving only admin.html + the /api/admin/* routes, and
+  # nothing of the Governor/student app at all.
+  - type: web
+    name: classroom-governor-admin
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: classroom-governor-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_ONLY
+        value: "true"
+      - key: DATABASE_SSL
+        value: "true"

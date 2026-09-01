@@ -60,10 +60,11 @@ them anywhere in the app (see `streams` table in `src/db.js`):
   to (the same matric number can exist independently in two different
   streams without conflict).
 - **Nobody — including whoever runs this deployment — can list or read
-  across streams.** Every data-bearing route resolves exactly one
-  `streamId`, either from the caller's own signed token or from an
-  explicit join code/id supplied by the caller, and every query is
-  scoped to it. There's no super-admin route.
+  across streams through the ordinary Governor/student app.** Every
+  data-bearing route resolves exactly one `streamId`, either from the
+  caller's own signed token or from an explicit join code/id supplied by
+  the caller, and every query is scoped to it. The one deliberate,
+  logged exception is the separate admin backoffice described next.
 - **Upgrading an existing single-tenant deployment:** `src/db.js` runs a
   one-time migration on boot that wraps any pre-existing class data into
   its own stream, so nothing is lost. See `GOVERNOR_EMAIL` /
@@ -72,6 +73,53 @@ them anywhere in the app (see `streams` table in `src/db.js`):
   keep signing in the same way; otherwise the data is preserved but
   nobody can sign into it until you either set those and restart, or
   reassign it manually.
+
+### Admin backoffice (separate service, separate URL)
+
+A separate, minimal page (`public/admin.html`) for account recovery and
+support — the situation that prompted it was getting locked out of a
+Governor account with no way back in except raw SQL. It's the one place
+that can see across every stream, so it's built deliberately narrow —
+including running as its **own deployment**, not a path on the main
+app's domain. `render.yaml` defines it as a second Render service,
+`classroom-governor-admin`, sharing the same database as the main
+`classroom-governor` service but nothing else — different URL, different
+process, different environment variables. A path like `/admin` on the
+main domain would still be reachable by anyone who guesses it, even
+without a password; a separate service means the main app's domain has
+no admin routes and no `admin.html` on it at all.
+
+Same codebase, switched by one environment variable:
+
+- **`ADMIN_ONLY=true`** is what makes `src/server.js` serve *only*
+  `admin.html` and the `/api/admin/*` routes — set on the
+  `classroom-governor-admin` service and nowhere else. Leave it unset
+  (the default) for the main app.
+- **`ADMIN_EMAIL`/`ADMIN_PASSWORD`** — the single hardcoded account, read
+  straight from the environment on every login, never stored as a
+  database row. Required whenever `ADMIN_ONLY=true`; the server refuses
+  to boot without them, since there'd be no way to log in otherwise.
+- **Its token lives in `sessionStorage`, not `localStorage`**, and expires
+  after 4 hours — shorter than a Governor's 12-hour token — since this
+  one can read every stream, not just one. It's also signed with its own
+  `JWT_SECRET` (generated separately for this service in `render.yaml`),
+  so it isn't interchangeable with a Governor/student token even if
+  someone got hold of one.
+- **Can do:** list all streams (name, join code, Governor email, student/
+  course counts, last activity), view a stream's full class data
+  read-only, reset a Governor's password, regenerate a join code, delete
+  a stream entirely (with a type-the-name-to-confirm prompt — this is
+  irreversible and cascades to that stream's roster, credentials, files,
+  and saved chats).
+- **Cannot do:** edit a stream's roster/attendance/materials content
+  directly — that stays the Governor's own action, through their own
+  account, on the main service. The backoffice can look, and can reset
+  access, but doesn't reach in and change class data itself.
+- **Every view and action is written to `admin_audit_log`** (action,
+  which stream, when) — an append-only table nothing else in the app
+  touches. This is what keeps "walled off, even from me" honest once an
+  admin account exists at all: there's no way to look at or touch a
+  stream through this door without it being recorded.
 
 ### Auth model
 
@@ -310,22 +358,33 @@ You have a Render account connected — here's the one-click path.
    git push -u origin main
    ```
 2. **In the Render dashboard:** New → Blueprint → pick this repo.
-   Render reads `render.yaml` and provisions two things together:
+   Render reads `render.yaml` and provisions three things together:
    - A free Postgres database
-   - A free web service running `npm install` then `npm start`
+   - The main app service (`classroom-governor`) — Governor + student UI
+   - The admin backoffice service (`classroom-governor-admin`) — its own
+     separate URL, sharing the same database, nothing else
 
-   `DATABASE_URL` is wired automatically, and `JWT_SECRET` is generated
-   for you — no manual secrets needed to deploy. (`GROQ_API_KEY` is
-   optional, for the AI study assistant — add it in the Environment tab
-   whenever you're ready; without it that tab just shows a "not
-   configured" message.)
+   `DATABASE_URL` is wired automatically for both services, and each gets
+   its own `JWT_SECRET` generated for you — no manual secrets needed to
+   deploy the main app. (`GROQ_API_KEY` is optional, for the AI study
+   assistant — add it to the main app's Environment tab whenever you're
+   ready; without it that tab just shows a "not configured" message.) The
+   admin service needs `ADMIN_EMAIL`/`ADMIN_PASSWORD` set by hand in its
+   own Environment tab before you can sign into it — until then it's up
+   but unusable, which is the safe default. If you don't need the
+   backoffice yet, just ignore that service; it costs nothing extra to
+   leave idle on Render's free tier.
 3. **Deploy.** First boot creates the database tables automatically —
    nothing to run by hand.
-4. Your app is live at the `.onrender.com` URL Render gives you. Share
-   that URL with anyone who wants to run their own class — they click
-   **Sign in as Governor → Create a stream** and get their own isolated
-   roster and a join code to hand out to students. Each attendance link
-   you generate is a `#checkin=JOINCODE.CODE` fragment on that same URL.
+4. Your app is live at the `.onrender.com` URL Render gives the
+   `classroom-governor` service. Share that URL with anyone who wants to
+   run their own class — they click **Sign in as Governor → Create a
+   stream** and get their own isolated roster and a join code to hand
+   out to students. Each attendance link you generate is a
+   `#checkin=JOINCODE.CODE` fragment on that same URL. The admin
+   backoffice lives at the *other* `.onrender.com` URL Render gives the
+   `classroom-governor-admin` service — bookmark it separately; it's
+   intentionally not linked from anywhere in the main app.
 
 ### Known limitations worth knowing before you rely on this
 

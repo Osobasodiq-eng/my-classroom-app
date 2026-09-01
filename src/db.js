@@ -273,6 +273,19 @@ async function init() {
     );
   `);
   await pool.query(`ALTER TABLE cgpa_records ADD COLUMN IF NOT EXISTS stream_id TEXT;`);
+
+  // Append-only — nothing in this app ever updates or deletes a row here,
+  // by design. It exists purely so the one place that can see across
+  // streams (the admin backoffice) leaves a trail of every time it did.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS admin_audit_log (
+      id SERIAL PRIMARY KEY,
+      action TEXT NOT NULL,
+      stream_id TEXT,
+      detail TEXT,
+      at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
 }
 
 // ---------- Streams ----------
@@ -315,6 +328,110 @@ async function getStreamByJoinCode(code) {
 async function getStreamById(id) {
   const { rows } = await pool.query('SELECT id, name, join_code FROM streams WHERE id = $1', [id]);
   return rows[0] || null;
+}
+
+// Admin-only view — includes the Governor's email (never the password
+// hash; that never leaves auth.js's bcrypt comparison). Kept separate
+// from getStreamById so nothing accidentally starts exposing more than
+// intended to a non-admin caller in the future.
+async function getStreamForAdmin(id) {
+  const { rows } = await pool.query(
+    'SELECT id, name, join_code, governor_email, created_at FROM streams WHERE id = $1',
+    [id]
+  );
+  return rows[0] || null;
+}
+
+// One row per stream, with cheap counts pulled from its app_state
+// document — enough for an admin to see what a stream is at a glance
+// without opening it. LEFT JOIN so a stream somehow missing its
+// app_state row (shouldn't happen) still shows up rather than vanishing.
+async function listStreamsForAdmin() {
+  const { rows } = await pool.query(`
+    SELECT
+      s.id, s.name, s.join_code, s.governor_email, s.created_at,
+      COALESCE(jsonb_array_length(a.data->'students'), 0) AS student_count,
+      COALESCE(jsonb_array_length(a.data->'courses'), 0) AS course_count,
+      a.updated_at AS last_activity
+    FROM streams s
+    LEFT JOIN app_state a ON a.stream_id = s.id
+    ORDER BY s.created_at DESC
+  `);
+  return rows;
+}
+
+async function adminResetGovernorPassword(streamId, passwordHash) {
+  const result = await pool.query('UPDATE streams SET governor_password_hash = $1 WHERE id = $2', [passwordHash, streamId]);
+  return result.rowCount > 0;
+}
+
+async function regenerateJoinCode(streamId) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const code = genJoinCode();
+    try {
+      const result = await pool.query('UPDATE streams SET join_code = $1 WHERE id = $2', [code, streamId]);
+      if (result.rowCount === 0) return null; // stream not found
+      return code;
+    } catch (err) {
+      if (err.code === '23505') continue; // collision — try another code
+      throw err;
+    }
+  }
+  throw new Error('Could not generate a unique join code — try again.');
+}
+
+// Deletes a stream and everything scoped to it. app_state/student_credentials/
+// files/cgpa_records don't have DB-level ON DELETE CASCADE tying them to
+// streams.id (student_credentials and files do; app_state and
+// cgpa_records were added before that pattern was settled on), so this
+// cleans all of them up explicitly in one transaction rather than relying
+// on a mix of enforced and unenforced foreign keys. Irreversible — the
+// caller (the admin route) is responsible for requiring confirmation
+// before calling this.
+async function deleteStreamCascade(streamId) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query('SELECT id FROM streams WHERE id = $1 FOR UPDATE', [streamId]);
+    if (!rows.length) {
+      await client.query('ROLLBACK');
+      return false;
+    }
+    await client.query('DELETE FROM cgpa_records WHERE stream_id = $1', [streamId]);
+    await client.query('DELETE FROM assistant_conversations WHERE identity = $1 OR identity LIKE $2', ['governor:' + streamId, 'student:' + streamId + ':%']);
+    await client.query('DELETE FROM assistant_chats WHERE identity = $1 OR identity LIKE $2', ['governor:' + streamId, 'student:' + streamId + ':%']);
+    await client.query('DELETE FROM files WHERE stream_id = $1', [streamId]);
+    await client.query('DELETE FROM student_credentials WHERE stream_id = $1', [streamId]);
+    await client.query('DELETE FROM app_state WHERE stream_id = $1', [streamId]);
+    await client.query('DELETE FROM streams WHERE id = $1', [streamId]);
+    await client.query('COMMIT');
+    return true;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+// Every admin action is recorded here — including read-only views of a
+// stream's data, not just the destructive ones. This table is what keeps
+// "walled off, even from me" honest once an admin backoffice exists at
+// all: there's no code path that reads across streams without leaving a
+// trace of who looked and when.
+async function logAdminAction(action, streamId, detail) {
+  await pool.query(
+    'INSERT INTO admin_audit_log (action, stream_id, detail) VALUES ($1, $2, $3)',
+    [action, streamId || null, detail || null]
+  );
+}
+
+async function listAdminAuditLog(limit = 200) {
+  const { rows } = await pool.query(
+    'SELECT action, stream_id, detail, at FROM admin_audit_log ORDER BY at DESC LIMIT $1',
+    [limit]
+  );
+  return rows;
 }
 
 // ---------- Per-stream class data ----------
@@ -758,4 +875,6 @@ module.exports = {
   resetStudentPassword, removeStudent, releaseMatric, saveFile, getFile, getFileText,
   finalizeExpiredSessions, listConversations, getConversation, createConversation,
   appendToConversation, deleteConversation, getCgpaRecord, saveCgpaRecord,
+  getStreamForAdmin, listStreamsForAdmin, adminResetGovernorPassword, regenerateJoinCode,
+  deleteStreamCascade, logAdminAction, listAdminAuditLog,
 };

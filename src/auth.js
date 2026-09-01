@@ -5,6 +5,7 @@ const db = require('./db');
 const SECRET = process.env.JWT_SECRET;
 const GOVERNOR_TOKEN_TTL = '12h';
 const STUDENT_TOKEN_TTL = '30d';
+const ADMIN_TOKEN_TTL = '4h'; // shorter-lived — this token can read across every stream
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // Any Governor can sign up and create their own stream — this is what
@@ -223,7 +224,51 @@ function requireAnyAuth(req, res, next) {
   }
 }
 
+// A single, hardcoded admin account — deliberately not a signup flow, and
+// deliberately not stored in the database: ADMIN_EMAIL/ADMIN_PASSWORD are
+// read straight from the environment on every login attempt, so there's
+// no admin row anywhere for an application bug (or a future feature) to
+// accidentally expose. This account can see across every stream, which
+// is exactly why it's kept this minimal and this separate from the
+// Governor/student account system.
+async function adminLogin(req, res) {
+  const { email, password } = req.body || {};
+  const configuredEmail = String(process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+  const configuredPassword = process.env.ADMIN_PASSWORD || '';
+  if (!configuredEmail || !configuredPassword) {
+    return res.status(503).json({ error: 'Admin login is not configured on this server.' });
+  }
+  const cleanEmail = String(email || '').trim().toLowerCase();
+  // Plain comparison, not bcrypt — there's exactly one of these accounts
+  // and its password lives in an environment variable, not a database
+  // row, so there's nothing here for a hash to protect against (no table
+  // to leak, no other admin rows to compare timing against). Simpler is
+  // safer than adding a hashing step that provides no real benefit here.
+  if (cleanEmail !== configuredEmail || String(password || '') !== configuredPassword) {
+    return res.status(401).json({ error: 'Incorrect email or password.' });
+  }
+  const token = jwt.sign({ role: 'admin' }, SECRET, { expiresIn: ADMIN_TOKEN_TTL });
+  res.json({ token });
+}
+
+function requireAdmin(req, res, next) {
+  const header = req.headers.authorization || '';
+  const [scheme, token] = header.split(' ');
+  if (scheme !== 'Bearer' || !token) {
+    return res.status(401).json({ error: 'Sign in as admin.' });
+  }
+  try {
+    const payload = jwt.verify(token, SECRET);
+    if (payload.role !== 'admin') throw new Error('wrong role');
+    req.auth = payload;
+    next();
+  } catch (err) {
+    return res.status(401).json({ error: 'Your admin session expired — sign in again.' });
+  }
+}
+
 module.exports = {
   governorSignup, login, requireGovernor, resolveJoinCode,
   studentSignup, studentLogin, requireStudent, resetStudentPassword, requireAnyAuth,
+  adminLogin, requireAdmin,
 };
