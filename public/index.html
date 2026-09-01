@@ -159,6 +159,16 @@
   .drawer{width:min(460px,92vw); background:var(--bg-deep); border-left:1px solid var(--rule-strong); height:100%; overflow-y:auto; padding:24px;}
   .drawer h2{font-family:'Fraunces',serif; margin:0 0 4px;}
   .drawer .close{float:right; background:none; border:none; color:var(--chalk-faint); font-size:20px; cursor:pointer;}
+  .share-success{ display:inline-flex; align-items:center; gap:6px; font-size:11px; text-transform:uppercase; letter-spacing:.1em; color:var(--green); border:1px solid rgba(159,214,171,0.4); background:rgba(159,214,171,0.08); border-radius:20px; padding:4px 10px; margin-bottom:14px; }
+  .share-code-box{ margin:18px 0 14px; padding:22px 16px; text-align:center; background:var(--panel-raised); border:1px solid var(--rule-strong); border-radius:12px; }
+  .share-code-label{ display:block; font-size:10.5px; text-transform:uppercase; letter-spacing:.14em; color:var(--chalk-faint); margin-bottom:8px; }
+  .share-code-value{ display:block; font-family:'IBM Plex Mono',monospace; font-size:30px; font-weight:600; letter-spacing:.22em; color:var(--brass); word-break:break-all; }
+  .share-divider{ display:flex; align-items:center; gap:10px; margin:20px 0 12px; font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--chalk-faint); }
+  .share-divider::before, .share-divider::after{ content:""; flex:1; height:1px; background:var(--rule); }
+  .share-link-row{ display:flex; gap:8px; }
+  .share-link-row input{ flex:1; min-width:0; }
+  .share-note{ margin-top:18px; padding:11px 13px; border-radius:8px; background:rgba(201,166,103,0.1); border:1px solid rgba(201,166,103,0.3); color:var(--brass); font-size:12.5px; line-height:1.55; }
+  .btn.copied{ background:var(--sage) !important; color:#173321 !important; }
   .lecturer-chip{ display:inline-flex; align-items:center; gap:6px; font-size:12.5px; background:rgba(241,238,226,0.06); border:1px solid var(--rule); border-radius:20px; padding:4px 6px 4px 10px; margin:0 6px 6px 0; }
   .lecturer-chip button{background:none; border:none; color:var(--chalk-faint); cursor:pointer; font-size:13px; padding:0 2px;}
   .lecturer-chip button:hover{color:var(--rose);}
@@ -387,6 +397,7 @@
   let joinCodeError = "";
   let shareOpen = false;
   let shareCopied = "";
+  let shareJustCreated = false;
 
   // ---------- STREAM (multi-tenant) ----------
   // The stream a Governor or student is currently in. Every API call that
@@ -1738,28 +1749,55 @@
       '</div></div>';
   }
 
-  // Always-available for the Governor — signup only shows the join
-  // code/link once, in a one-time alert, which is easy to lose track of.
-  // This is the persistent place to find it again.
+  // Always-available for the Governor — signup only used to show the join
+  // code/link in a one-time browser alert(), which is easy to lose track
+  // of and looks like an error dialog. This is the persistent, styled
+  // place to find it again, and also what's shown right after signup.
   function renderShareModal(){
     if(!shareOpen || !currentStream) return "";
     const link = streamJoinUrl(currentStream.joinCode);
-    return '<div class="drawer-overlay" id="shareOverlay"><div class="drawer" style="width:min(380px,92vw);">' +
+    const approved = currentStream.status === "approved";
+    return '<div class="drawer-overlay" id="shareOverlay"><div class="drawer" style="width:min(420px,92vw);">' +
       '<button class="close" id="closeShareDrawer">×</button>' +
-      '<h2>Share ' + escapeHtml(currentStream.name) + '</h2>' +
-      '<p class="hint" style="margin-bottom:16px;">Give students either of these — both take them straight to your class.</p>' +
-      '<div class="field"><label>Join code</label>' +
-        '<div style="display:flex; gap:8px;">' +
-          '<input readonly type="text" id="shareCodeInput" value="' + escapeHtml(currentStream.joinCode) + '" style="flex:1; letter-spacing:2px; font-weight:600;" />' +
-          '<button class="btn ghost small" type="button" id="copyCodeBtn">Copy</button>' +
-        '</div></div>' +
-      '<div class="field"><label>Join link</label>' +
-        '<div style="display:flex; gap:8px;">' +
-          '<input readonly type="text" id="shareLinkInput" value="' + escapeHtml(link) + '" style="flex:1;" />' +
-          '<button class="btn ghost small" type="button" id="copyLinkBtn">Copy</button>' +
-        '</div></div>' +
-      (shareCopied ? '<p class="hint" style="color:var(--sage,inherit);">' + escapeHtml(shareCopied) + ' copied.</p>' : '') +
+      (shareJustCreated ? '<span class="share-success">&#10003; Stream created</span><br/>' : '') +
+      '<h2>' + escapeHtml(currentStream.name) + '</h2>' +
+      '<p class="hint" style="margin-bottom:0;">Give students either of these to join.</p>' +
+      '<div class="share-code-box">' +
+        '<span class="share-code-label">Join code</span>' +
+        '<span class="share-code-value">' + escapeHtml(currentStream.joinCode) + '</span>' +
+      '</div>' +
+      '<button class="btn' + (shareCopied === "code" ? " copied" : "") + '" type="button" id="copyCodeBtn" style="width:100%;">' + (shareCopied === "code" ? "Copied ✓" : "Copy join code") + '</button>' +
+      '<div class="share-divider">or share a link</div>' +
+      '<div class="share-link-row">' +
+        '<div class="field" style="margin:0;"><input readonly type="text" id="shareLinkInput" value="' + escapeHtml(link) + '" /></div>' +
+        '<button class="btn ghost' + (shareCopied === "link" ? " copied" : "") + '" type="button" id="copyLinkBtn">' + (shareCopied === "link" ? "Copied ✓" : "Copy") + '</button>' +
+      '</div>' +
+      (!approved ? '<p class="share-note">This code won\u2019t work for students until an admin approves your stream. You can share it now \u2014 it\u2019ll just start working once approved.</p>' : '') +
       '</div></div>';
+  }
+
+  async function copyToClipboard(text){
+    try{ await navigator.clipboard.writeText(text); return true; }
+    catch(err){
+      // Clipboard API needs a secure context/permission that isn't always
+      // available (e.g. an embedded preview) — a manual select+copy
+      // still gets the value into the user's clipboard via the browser's
+      // native copy command as a fallback.
+      const input = document.createElement("textarea");
+      input.value = text; document.body.appendChild(input); input.select();
+      try{ document.execCommand("copy"); document.body.removeChild(input); return true; }
+      catch(err2){ document.body.removeChild(input); return false; }
+    }
+  }
+  function attachShareModalEvents(){
+    const closeShareDrawer = document.getElementById("closeShareDrawer");
+    if(closeShareDrawer) closeShareDrawer.addEventListener("click", () => { shareOpen = false; shareJustCreated = false; render(); });
+    const shareOverlay = document.getElementById("shareOverlay");
+    if(shareOverlay) shareOverlay.addEventListener("click", (e) => { if(e.target === shareOverlay){ shareOpen = false; shareJustCreated = false; render(); } });
+    const copyCodeBtn = document.getElementById("copyCodeBtn");
+    if(copyCodeBtn) copyCodeBtn.addEventListener("click", async () => { if(await copyToClipboard(currentStream.joinCode)){ shareCopied = "code"; render(); } });
+    const copyLinkBtn = document.getElementById("copyLinkBtn");
+    if(copyLinkBtn) copyLinkBtn.addEventListener("click", async () => { if(await copyToClipboard(streamJoinUrl(currentStream.joinCode))){ shareCopied = "link"; render(); } });
   }
 
   async function submitStudentAuth(fd){
@@ -1999,8 +2037,9 @@
     if(role === "governor" && authToken && currentStream && currentStream.status && currentStream.status !== "approved"){
       const appRoot = document.getElementById("appRoot");
       appRoot.innerHTML = renderPendingApproval();
-      drawerHost.innerHTML = "";
+      drawerHost.innerHTML = renderShareModal();
       attachPendingApprovalEvents();
+      attachShareModalEvents();
       return;
     }
 
@@ -2676,10 +2715,8 @@
         if(result.ok){
           loginOpen = false; loginError = ""; role = "governor"; myIdentityId = null;
           if(currentStream && currentStream.status === "approved") await loadData();
+          if(isCreate && result.stream){ shareOpen = true; shareJustCreated = true; shareCopied = ""; }
           render();
-          if(isCreate && result.stream){
-            alert("Your stream is ready! Once an admin approves it, share this join code with students: " + result.stream.joinCode + "\n\nOr this link:\n" + streamJoinUrl(result.stream.joinCode));
-          }
         } else {
           loginError = result.error; render();
         }
@@ -2710,28 +2747,7 @@
     const studentAuthWrongClass = document.getElementById("studentAuthWrongClass");
     if(studentAuthWrongClass) studentAuthWrongClass.addEventListener("click", (e) => { e.preventDefault(); setCurrentStream(null); joinCodeError = ""; render(); });
 
-    // Share-class panel (Governor: view/copy join code + link any time)
-    const closeShareDrawer = document.getElementById("closeShareDrawer");
-    if(closeShareDrawer) closeShareDrawer.addEventListener("click", () => { shareOpen = false; render(); });
-    const shareOverlay = document.getElementById("shareOverlay");
-    if(shareOverlay) shareOverlay.addEventListener("click", (e) => { if(e.target === shareOverlay){ shareOpen = false; render(); } });
-    async function copyToClipboard(text){
-      try{ await navigator.clipboard.writeText(text); return true; }
-      catch(err){
-        // Clipboard API needs a secure context/permission that isn't always
-        // available (e.g. an embedded preview) — a manual select+copy
-        // still gets the value into the user's clipboard via the browser's
-        // native copy command as a fallback.
-        const input = document.createElement("textarea");
-        input.value = text; document.body.appendChild(input); input.select();
-        try{ document.execCommand("copy"); document.body.removeChild(input); return true; }
-        catch(err2){ document.body.removeChild(input); return false; }
-      }
-    }
-    const copyCodeBtn = document.getElementById("copyCodeBtn");
-    if(copyCodeBtn) copyCodeBtn.addEventListener("click", async () => { if(await copyToClipboard(currentStream.joinCode)){ shareCopied = "Join code"; render(); } });
-    const copyLinkBtn = document.getElementById("copyLinkBtn");
-    if(copyLinkBtn) copyLinkBtn.addEventListener("click", async () => { if(await copyToClipboard(streamJoinUrl(currentStream.joinCode))){ shareCopied = "Join link"; render(); } });
+    attachShareModalEvents();
     const studentAuthSwitch = document.getElementById("studentAuthSwitch");
     if(studentAuthSwitch) studentAuthSwitch.addEventListener("click", (e) => { e.preventDefault(); studentAuthMode = studentAuthMode === "signup" ? "signin" : "signup"; studentAuthError = ""; render(); });
     const studentAuthForm = document.getElementById("studentAuthForm");
@@ -2771,7 +2787,7 @@
     else studentLogout();
   });
   const shareClassBtnEl = document.getElementById("shareClassBtn");
-  if(shareClassBtnEl) shareClassBtnEl.addEventListener("click", () => { shareOpen = true; shareCopied = ""; render(); });
+  if(shareClassBtnEl) shareClassBtnEl.addEventListener("click", () => { shareOpen = true; shareJustCreated = false; shareCopied = ""; render(); });
 
   const classNameInput = document.getElementById("classNameInput");
   let nameSaveTimer;
