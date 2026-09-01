@@ -31,9 +31,9 @@ async function governorSignup(req, res) {
       return res.status(409).json({ error: 'A stream is already registered to that email — try signing in instead.' });
     }
     const passwordHash = await bcrypt.hash(String(password), 10);
-    const { id: streamId, joinCode } = await db.createStream(String(streamName).trim(), cleanEmail, passwordHash);
+    const { id: streamId, joinCode, status } = await db.createStream(String(streamName).trim(), cleanEmail, passwordHash);
     const token = jwt.sign({ role: 'governor', streamId }, SECRET, { expiresIn: GOVERNOR_TOKEN_TTL });
-    res.json({ token, stream: { id: streamId, name: String(streamName).trim(), joinCode } });
+    res.json({ token, stream: { id: streamId, name: String(streamName).trim(), joinCode, status } });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Could not create your stream — try again.' });
@@ -55,7 +55,7 @@ async function login(req, res) {
     const match = await bcrypt.compare(password, stream.governor_password_hash);
     if (!match) return res.status(401).json({ error: 'Incorrect password.' });
     const token = jwt.sign({ role: 'governor', streamId: stream.id }, SECRET, { expiresIn: GOVERNOR_TOKEN_TTL });
-    res.json({ token, stream: { id: stream.id, name: stream.name, joinCode: stream.join_code } });
+    res.json({ token, stream: { id: stream.id, name: stream.name, joinCode: stream.join_code, status: stream.status } });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Could not sign you in — try again.' });
@@ -79,6 +79,23 @@ function requireGovernor(req, res, next) {
   }
 }
 
+// A Governor's token doesn't carry their stream's current approval
+// status (it's set once at login and could go stale — an admin might
+// approve the stream minutes later, same session). The frontend calls
+// this after every sign-in and on reload to get the authoritative,
+// current status before deciding whether to show the dashboard or a
+// "waiting for approval" screen.
+async function getMyStream(req, res) {
+  try {
+    const stream = await db.getStreamById(req.streamId);
+    if (!stream) return res.status(404).json({ error: 'Stream not found.' });
+    res.json({ stream: { id: stream.id, name: stream.name, joinCode: stream.join_code, status: stream.status } });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Could not load your stream.' });
+  }
+}
+
 // Public: lets the student-facing UI turn a join code (typed in, or from
 // a shared join link) into the stream it belongs to, before the student
 // has any account or token yet.
@@ -88,6 +105,13 @@ async function resolveJoinCode(req, res) {
   try {
     const stream = await db.getStreamByJoinCode(code);
     if (!stream) return res.status(404).json({ error: "That join code doesn't match any class. Check it and try again." });
+    // A stream awaiting (or denied) admin approval doesn't exist yet as
+    // far as students are concerned — resolving its join code is the
+    // first step of finding a class, so this is where that gets stopped,
+    // before a signup/login form for it is ever shown.
+    if (stream.status !== 'approved') {
+      return res.status(403).json({ error: 'This class is awaiting approval and isn\'t open to students yet — check back soon.' });
+    }
     res.json({ streamId: stream.id, name: stream.name, joinCode: stream.join_code });
   } catch (err) {
     console.error(err);
@@ -117,6 +141,11 @@ async function studentSignup(req, res) {
   try {
     const stream = await db.getStreamByJoinCode(String(joinCode));
     if (!stream) return res.status(404).json({ error: "That join code doesn't match any class." });
+    // Defense in depth: the frontend already stops here via
+    // resolveJoinCode, but this endpoint is reachable directly too.
+    if (stream.status !== 'approved') {
+      return res.status(403).json({ error: 'This class is awaiting approval and isn\'t open to students yet.' });
+    }
     const passwordHash = await bcrypt.hash(String(password), 10);
     const result = await db.studentSignup(stream.id, String(matric), String(name || '').trim(), String(email).trim(), passwordHash);
     if (!result.ok) return res.status(result.status).json({ error: result.error });
@@ -143,6 +172,9 @@ async function studentLogin(req, res) {
   try {
     const stream = await db.getStreamByJoinCode(String(joinCode));
     if (!stream) return res.status(404).json({ error: "That join code doesn't match any class." });
+    if (stream.status !== 'approved') {
+      return res.status(403).json({ error: 'This class is awaiting approval and isn\'t open to students yet.' });
+    }
     const cred = await db.studentCredential(stream.id, String(matric));
     if (!cred) return res.status(401).json({ error: 'No account found for that matric number in this class. Sign up first.' });
     const match = await bcrypt.compare(String(password), cred.password_hash);
@@ -268,7 +300,7 @@ function requireAdmin(req, res, next) {
 }
 
 module.exports = {
-  governorSignup, login, requireGovernor, resolveJoinCode,
+  governorSignup, login, requireGovernor, resolveJoinCode, getMyStream,
   studentSignup, studentLogin, requireStudent, resetStudentPassword, requireAnyAuth,
   adminLogin, requireAdmin,
 };

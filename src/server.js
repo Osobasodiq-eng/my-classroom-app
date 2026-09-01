@@ -6,7 +6,7 @@ const multer = require('multer');
 const bcrypt = require('bcryptjs');
 const db = require('./db');
 const {
-  governorSignup, login, requireGovernor, resolveJoinCode,
+  governorSignup, login, requireGovernor, resolveJoinCode, getMyStream,
   studentSignup, studentLogin, requireStudent, resetStudentPassword, requireAnyAuth,
   adminLogin, requireAdmin,
 } = require('./auth');
@@ -64,6 +64,34 @@ if (ADMIN_ONLY) {
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: 'Could not load streams.' });
+    }
+  });
+
+  // A new stream is unusable — no class data changes, no student
+  // signups — until one of these two is called. Kept as two explicit
+  // endpoints (rather than one generic "set status") so each is its own
+  // clearly-named, clearly-logged action.
+  app.post('/api/admin/streams/:id/approve', requireAdmin, async (req, res) => {
+    try {
+      const ok = await db.setStreamStatus(req.params.id, 'approved');
+      if (!ok) return res.status(404).json({ error: 'Stream not found.' });
+      await db.logAdminAction('approve_stream', req.params.id, null);
+      res.json({ ok: true, status: 'approved' });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: 'Could not approve the stream.' });
+    }
+  });
+
+  app.post('/api/admin/streams/:id/reject', requireAdmin, async (req, res) => {
+    try {
+      const ok = await db.setStreamStatus(req.params.id, 'rejected');
+      if (!ok) return res.status(404).json({ error: 'Stream not found.' });
+      await db.logAdminAction('reject_stream', req.params.id, null);
+      res.json({ ok: true, status: 'rejected' });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: 'Could not reject the stream.' });
     }
   });
 
@@ -179,13 +207,41 @@ if (ADMIN_ONLY) {
     next();
   }
 
+  // A stream that hasn't been approved by an admin yet exists (the
+  // Governor can sign in, the row is real) but can't be used for actual
+  // class administration — this is the gate that enforces that. Kept
+  // separate from requireGovernor itself so identity/auth stays a
+  // distinct concern from "is this stream allowed to operate yet."
+  async function requireApprovedStream(req, res, next) {
+    try {
+      const stream = await db.getStreamById(req.streamId);
+      if (!stream) return res.status(404).json({ error: 'Stream not found.' });
+      if (stream.status !== 'approved') {
+        return res.status(403).json({
+          error: stream.status === 'rejected'
+            ? 'This stream was not approved and can\'t be used. Contact support if you believe this is a mistake.'
+            : 'This stream is awaiting admin approval — you\'ll be able to make changes once it\'s approved.',
+          status: stream.status,
+        });
+      }
+      next();
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: 'Could not verify stream status.' });
+    }
+  }
+
   app.post('/api/auth/governor-signup', governorSignup);
   app.post('/api/auth/login', login);
   app.get('/api/streams/by-code/:code', resolveJoinCode);
   app.post('/api/auth/student-signup', studentSignup);
   app.post('/api/auth/student-login', studentLogin);
-  app.post('/api/students/:studentId/reset-password', requireGovernor, resetStudentPassword);
-  app.delete('/api/students/:studentId', requireGovernor, async (req, res) => {
+  // Lets a signed-in Governor re-check their own stream's current
+  // approval status at any time — their token is issued once at login
+  // and doesn't update itself if an admin approves the stream mid-session.
+  app.get('/api/streams/me', requireGovernor, getMyStream);
+  app.post('/api/students/:studentId/reset-password', requireGovernor, requireApprovedStream, resetStudentPassword);
+  app.delete('/api/students/:studentId', requireGovernor, requireApprovedStream, async (req, res) => {
     try {
       const result = await db.removeStudent(req.streamId, req.params.studentId);
       res.json(result);
@@ -194,7 +250,7 @@ if (ADMIN_ONLY) {
       res.status(500).json({ error: 'Could not remove the student — try again.' });
     }
   });
-  app.delete('/api/matric/:matric', requireGovernor, async (req, res) => {
+  app.delete('/api/matric/:matric', requireGovernor, requireApprovedStream, async (req, res) => {
     try {
       const freed = await db.releaseMatric(req.streamId, req.params.matric);
       res.json({ ok: true, freed });
@@ -249,7 +305,7 @@ if (ADMIN_ONLY) {
     }
   });
 
-  app.put('/api/state', requireGovernor, async (req, res) => {
+  app.put('/api/state', requireGovernor, requireApprovedStream, async (req, res) => {
     const { data, version } = req.body || {};
     if (typeof version !== 'number' || typeof data !== 'object' || data === null) {
       return res.status(400).json({ error: 'Malformed save request.' });
@@ -275,7 +331,7 @@ if (ADMIN_ONLY) {
   // client sends, so a student can only ever mark themselves present, on a
   // session that belongs to their own stream, never a classmate or another
   // stream's session.
-  app.post('/api/checkin/:code/signin', requireStudent, async (req, res) => {
+  app.post('/api/checkin/:code/signin', requireStudent, requireApprovedStream, async (req, res) => {
     const { code } = req.params;
     const studentId = req.auth.studentId;
     try {
@@ -289,7 +345,7 @@ if (ADMIN_ONLY) {
   });
 
   // Governor-only upload — used for materials and course outline attachments.
-  app.post('/api/files', requireGovernor, upload.single('file'), async (req, res) => {
+  app.post('/api/files', requireGovernor, requireApprovedStream, upload.single('file'), async (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'No file received.' });
     try {
       const saved = await db.saveFile(req.streamId, req.file.originalname, req.file.mimetype, req.file.buffer);

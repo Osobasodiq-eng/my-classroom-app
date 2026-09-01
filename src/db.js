@@ -190,6 +190,14 @@ async function init() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
+  // Added after `streams` already existed in earlier deploys — the
+  // DEFAULT here is what makes this safe: every already-existing stream
+  // (including ones created before this feature existed at all)
+  // automatically becomes 'approved' the moment this column is added, so
+  // nothing already running gets locked out. Only streams created by
+  // createStream() from here on start life as 'pending' (it inserts that
+  // explicitly, overriding this default).
+  await pool.query(`ALTER TABLE streams ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'approved';`);
 
   await migrateToMultiTenant();
 
@@ -298,12 +306,16 @@ async function createStream(name, email, passwordHash) {
   // times with a fresh code instead.
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
+      // New streams start 'pending' — an admin has to approve them
+      // before the Governor can do anything with class data, or a
+      // student can even resolve the join code. See requireApprovedStream
+      // in server.js and the status checks in auth.js.
       await pool.query(
-        'INSERT INTO streams (id, name, join_code, governor_email, governor_password_hash) VALUES ($1, $2, $3, $4, $5)',
-        [id, name, joinCode, email, passwordHash]
+        'INSERT INTO streams (id, name, join_code, governor_email, governor_password_hash, status) VALUES ($1, $2, $3, $4, $5, $6)',
+        [id, name, joinCode, email, passwordHash, 'pending']
       );
       await pool.query('INSERT INTO app_state (stream_id, data, version) VALUES ($1, $2, 1)', [id, DEFAULT_DATA()]);
-      return { id, joinCode };
+      return { id, joinCode, status: 'pending' };
     } catch (err) {
       if (err.code === '23505' && String(err.constraint).includes('join_code')) {
         joinCode = genJoinCode();
@@ -321,12 +333,12 @@ async function getStreamByEmail(email) {
 }
 
 async function getStreamByJoinCode(code) {
-  const { rows } = await pool.query('SELECT id, name, join_code FROM streams WHERE join_code = $1', [String(code).trim().toUpperCase()]);
+  const { rows } = await pool.query('SELECT id, name, join_code, status FROM streams WHERE join_code = $1', [String(code).trim().toUpperCase()]);
   return rows[0] || null;
 }
 
 async function getStreamById(id) {
-  const { rows } = await pool.query('SELECT id, name, join_code FROM streams WHERE id = $1', [id]);
+  const { rows } = await pool.query('SELECT id, name, join_code, status FROM streams WHERE id = $1', [id]);
   return rows[0] || null;
 }
 
@@ -336,7 +348,7 @@ async function getStreamById(id) {
 // intended to a non-admin caller in the future.
 async function getStreamForAdmin(id) {
   const { rows } = await pool.query(
-    'SELECT id, name, join_code, governor_email, created_at FROM streams WHERE id = $1',
+    'SELECT id, name, join_code, governor_email, status, created_at FROM streams WHERE id = $1',
     [id]
   );
   return rows[0] || null;
@@ -346,18 +358,29 @@ async function getStreamForAdmin(id) {
 // document — enough for an admin to see what a stream is at a glance
 // without opening it. LEFT JOIN so a stream somehow missing its
 // app_state row (shouldn't happen) still shows up rather than vanishing.
+// Ordered pending-first — that's the queue an admin actually needs to
+// work through — then newest-first within each status.
 async function listStreamsForAdmin() {
   const { rows } = await pool.query(`
     SELECT
-      s.id, s.name, s.join_code, s.governor_email, s.created_at,
+      s.id, s.name, s.join_code, s.governor_email, s.status, s.created_at,
       COALESCE(jsonb_array_length(a.data->'students'), 0) AS student_count,
       COALESCE(jsonb_array_length(a.data->'courses'), 0) AS course_count,
       a.updated_at AS last_activity
     FROM streams s
     LEFT JOIN app_state a ON a.stream_id = s.id
-    ORDER BY s.created_at DESC
+    ORDER BY (s.status = 'pending') DESC, s.created_at DESC
   `);
   return rows;
+}
+
+// A new stream can't do anything — no class data changes, no students
+// able to join — until an admin flips it to 'approved' here. See
+// requireApprovedStream in server.js and the status checks around
+// join-code resolution and student signup/login in auth.js.
+async function setStreamStatus(streamId, status) {
+  const result = await pool.query('UPDATE streams SET status = $1 WHERE id = $2', [status, streamId]);
+  return result.rowCount > 0;
 }
 
 async function adminResetGovernorPassword(streamId, passwordHash) {
@@ -876,5 +899,5 @@ module.exports = {
   finalizeExpiredSessions, listConversations, getConversation, createConversation,
   appendToConversation, deleteConversation, getCgpaRecord, saveCgpaRecord,
   getStreamForAdmin, listStreamsForAdmin, adminResetGovernorPassword, regenerateJoinCode,
-  deleteStreamCascade, logAdminAction, listAdminAuditLog,
+  deleteStreamCascade, logAdminAction, listAdminAuditLog, setStreamStatus,
 };

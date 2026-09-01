@@ -144,26 +144,41 @@
       '</div>';
   }
 
+  function statusBadge(status){
+    const styles = {
+      pending: "color:#8a6d1f; background:rgba(201,166,103,0.18); border-color:rgba(201,166,103,0.5);",
+      approved: "color:var(--sage); background:rgba(127,169,143,0.15); border-color:rgba(127,169,143,0.4);",
+      rejected: "color:var(--rose); background:rgba(193,102,107,0.15); border-color:rgba(193,102,107,0.4);",
+    };
+    return '<span class="pill" style="' + (styles[status]||"") + '">' + escapeHtml(status||"unknown") + '</span>';
+  }
+
   function renderList(){
     let rows = "";
     if(listError){
-      rows = '<tr><td colspan="6"><p class="error" style="margin:0;">' + escapeHtml(listError) + '</p></td></tr>';
+      rows = '<tr><td colspan="7"><p class="error" style="margin:0;">' + escapeHtml(listError) + '</p></td></tr>';
     } else if(!streams.length){
-      rows = '<tr><td colspan="6" class="sub">No streams yet.</td></tr>';
+      rows = '<tr><td colspan="7" class="sub">No streams yet.</td></tr>';
     } else {
       rows = streams.map(s =>
         '<tr class="clickable" data-open="' + escapeHtml(s.id) + '">' +
           '<td>' + escapeHtml(s.name) + '</td>' +
           '<td class="mono">' + escapeHtml(s.governor_email) + '</td>' +
           '<td><span class="pill">' + escapeHtml(s.join_code) + '</span></td>' +
+          '<td>' + statusBadge(s.status) + '</td>' +
           '<td>' + s.student_count + '</td>' +
           '<td>' + s.course_count + '</td>' +
-          '<td class="sub">' + fmtDate(s.last_activity) + '</td>' +
+          '<td class="sub">' +
+            (s.status === "pending"
+              ? '<button class="btn small" data-quick-approve="' + escapeHtml(s.id) + '" style="margin-right:6px;">Approve</button>' +
+                '<button class="btn ghost small" data-quick-reject="' + escapeHtml(s.id) + '">Reject</button>'
+              : fmtDate(s.last_activity)) +
+          '</td>' +
         '</tr>'
       ).join("");
     }
     return '<div class="row">' +
-        '<div><span class="mark">Roll Call</span><h1 style="margin-top:10px;">Admin</h1><p class="sub" style="margin-bottom:0;">' + streams.length + ' stream' + (streams.length===1?"":"s") + '</p></div>' +
+        '<div><span class="mark">Roll Call</span><h1 style="margin-top:10px;">Admin</h1><p class="sub" style="margin-bottom:0;">' + streams.length + ' stream' + (streams.length===1?"":"s") + (streams.filter(s=>s.status==="pending").length ? ' · <strong style="color:var(--brass);">' + streams.filter(s=>s.status==="pending").length + ' awaiting approval</strong>' : '') + '</p></div>' +
         '<div class="actions">' +
           '<button class="btn ghost small" id="viewLogBtn">Audit log</button>' +
           '<button class="btn ghost small" id="refreshBtn">Refresh</button>' +
@@ -171,7 +186,7 @@
         '</div>' +
       '</div>' +
       '<div class="panel">' +
-        '<table><thead><tr><th>Stream</th><th>Governor email</th><th>Join code</th><th>Students</th><th>Courses</th><th>Last activity</th></tr></thead>' +
+        '<table><thead><tr><th>Stream</th><th>Governor email</th><th>Join code</th><th>Status</th><th>Students</th><th>Courses</th><th>Last activity / Action</th></tr></thead>' +
         '<tbody>' + rows + '</tbody></table>' +
       '</div>';
   }
@@ -202,11 +217,14 @@
       (actionError ? '<p class="error">' + escapeHtml(actionError) + '</p>' : '') +
       '<div class="panel">' +
         '<div class="kv">' +
+          '<div>Status</div><div>' + statusBadge(s.status) + '</div>' +
           '<div>Governor email</div><div class="mono">' + escapeHtml(s.governor_email) + '</div>' +
           '<div>Join code</div><div><span class="pill">' + escapeHtml(s.join_code) + '</span></div>' +
           '<div>Created</div><div>' + fmtDate(s.created_at) + '</div>' +
         '</div>' +
         '<div style="margin-top:16px;" class="actions">' +
+          (s.status !== "approved" ? '<button class="btn small" id="approveBtn">Approve</button>' : '') +
+          (s.status !== "rejected" ? '<button class="btn ghost small" id="rejectBtn">Reject</button>' : '') +
           '<button class="btn ghost small" id="resetPwBtn">Reset Governor password</button>' +
           '<button class="btn ghost small" id="regenCodeBtn">Regenerate join code</button>' +
           '<button class="btn danger small" id="deleteStreamBtn">Delete stream</button>' +
@@ -279,6 +297,45 @@
     if(backToList) backToList.addEventListener("click", (e) => { e.preventDefault(); view = "list"; loadStreams(); });
     document.querySelectorAll("[data-open]").forEach(tr => {
       tr.addEventListener("click", () => openStream(tr.getAttribute("data-open")));
+    });
+    // Quick approve/reject directly from the list — stopPropagation so
+    // clicking the button doesn't also trigger the row's open-stream click.
+    document.querySelectorAll("[data-quick-approve]").forEach(btn => {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        try{ await api("/streams/" + encodeURIComponent(btn.getAttribute("data-quick-approve")) + "/approve", { method: "POST" }); await loadStreams(); }
+        catch(err){ listError = err.message; render(); }
+      });
+    });
+    document.querySelectorAll("[data-quick-reject]").forEach(btn => {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        if(!confirm("Reject this stream? The Governor won't be able to use it and students can't join.")) return;
+        try{ await api("/streams/" + encodeURIComponent(btn.getAttribute("data-quick-reject")) + "/reject", { method: "POST" }); await loadStreams(); }
+        catch(err){ listError = err.message; render(); }
+      });
+    });
+
+    const approveBtn = document.getElementById("approveBtn");
+    if(approveBtn) approveBtn.addEventListener("click", async () => {
+      actionMsg = ""; actionError = "";
+      try{
+        await api("/streams/" + encodeURIComponent(current.stream.id) + "/approve", { method: "POST" });
+        current.stream.status = "approved";
+        actionMsg = "Stream approved — the Governor can now use it and students can join.";
+      }catch(e){ actionError = e.message; }
+      render();
+    });
+    const rejectBtn = document.getElementById("rejectBtn");
+    if(rejectBtn) rejectBtn.addEventListener("click", async () => {
+      if(!confirm("Reject this stream? The Governor won't be able to use it and students can't join.")) return;
+      actionMsg = ""; actionError = "";
+      try{
+        await api("/streams/" + encodeURIComponent(current.stream.id) + "/reject", { method: "POST" });
+        current.stream.status = "rejected";
+        actionMsg = "Stream rejected.";
+      }catch(e){ actionError = e.message; }
+      render();
     });
 
     const resetPwBtn = document.getElementById("resetPwBtn");

@@ -1852,6 +1852,51 @@
     if(gateStudentBtn) gateStudentBtn.addEventListener("click", () => { studentAuthOpen = true; studentAuthMode = "signin"; studentAuthError = ""; joinCodeError = ""; render(); });
   }
 
+  // Shown to a signed-in Governor whose stream hasn't been approved (or
+  // was rejected) by an admin yet — instead of the real dashboard, which
+  // would just 403 on every save attempt anyway.
+  function renderPendingApproval(){
+    const rejected = currentStream && currentStream.status === "rejected";
+    return '<div class="auth-gate"><div class="kiosk-card">' +
+      '<span class="mark">Roll Call</span>' +
+      '<h1>' + escapeHtml(currentStream ? currentStream.name : "Your stream") + '</h1>' +
+      (rejected
+        ? '<p class="sub">This stream was not approved. If you believe this is a mistake, reach out to support.</p>'
+        : '<p class="sub">Your stream has been created and is awaiting approval. You\'ll be able to add courses, take attendance, and invite students as soon as it\'s approved — this page will update automatically once it is.</p>') +
+      '<button class="btn ghost" type="button" id="pendingRefreshBtn">Check status</button>' +
+      '<button class="btn ghost" type="button" id="pendingSignOutBtn">Sign out</button>' +
+      '</div></div>';
+  }
+  function attachPendingApprovalEvents(){
+    const refreshBtn = document.getElementById("pendingRefreshBtn");
+    if(refreshBtn) refreshBtn.addEventListener("click", async () => {
+      refreshBtn.disabled = true; refreshBtn.textContent = "Checking…";
+      await refreshGovernorStreamStatus();
+      if(currentStream && currentStream.status === "approved") await loadData();
+      render();
+    });
+    const signOutBtn = document.getElementById("pendingSignOutBtn");
+    if(signOutBtn) signOutBtn.addEventListener("click", governorLogout);
+  }
+
+  // Re-checks the signed-in Governor's stream status against the server —
+  // their token doesn't update itself if an admin approves/rejects mid-
+  // session, so this is called right after login/signup and again on
+  // every reload, rather than trusting whatever status came back at
+  // login time.
+  async function refreshGovernorStreamStatus(){
+    if(!authToken) return null;
+    try{
+      const res = await fetch("/api/streams/me", { headers: { "Authorization": "Bearer " + authToken } });
+      const json = await res.json();
+      if(!res.ok){ return null; }
+      setCurrentStream(json.stream);
+      return json.stream.status;
+    }catch(e){
+      return null;
+    }
+  }
+
   function renderKiosk(code){
     const session = data.attendanceSessions.find(s => s.code === code);
     if(!session){
@@ -1945,6 +1990,17 @@
       drawerHost.innerHTML = renderLoginModal() + renderStudentAuthModal();
       attachAuthGateEvents();
       attachEvents(); // covers the login/signup form submissions inside the modals
+      return;
+    }
+
+    // A signed-in Governor whose stream isn't approved yet sees a holding
+    // screen instead of the dashboard — there's nothing real to show them
+    // anyway, since every save/upload route 403s until an admin approves.
+    if(role === "governor" && authToken && currentStream && currentStream.status && currentStream.status !== "approved"){
+      const appRoot = document.getElementById("appRoot");
+      appRoot.innerHTML = renderPendingApproval();
+      drawerHost.innerHTML = "";
+      attachPendingApprovalEvents();
       return;
     }
 
@@ -2619,9 +2675,10 @@
           : await governorLogin(fd.get("email"), fd.get("password"));
         if(result.ok){
           loginOpen = false; loginError = ""; role = "governor"; myIdentityId = null;
-          await loadData(); render();
+          if(currentStream && currentStream.status === "approved") await loadData();
+          render();
           if(isCreate && result.stream){
-            alert("Your stream is ready! Share this join code with students: " + result.stream.joinCode + "\n\nOr this link:\n" + streamJoinUrl(result.stream.joinCode));
+            alert("Your stream is ready! Once an admin approves it, share this join code with students: " + result.stream.joinCode + "\n\nOr this link:\n" + streamJoinUrl(result.stream.joinCode));
           }
         } else {
           loginError = result.error; render();
@@ -2747,6 +2804,10 @@
 
   (async function init(){
     await ensureStreamForRoute();
+    // A persisted Governor session's cached status could be stale (an
+    // admin may have approved/rejected since the last time this loaded),
+    // so it's re-checked against the server before deciding what to show.
+    if(authToken) await refreshGovernorStreamStatus();
     await loadData();
     render();
   })();

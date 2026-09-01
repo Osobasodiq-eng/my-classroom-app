@@ -105,7 +105,8 @@ Same codebase, switched by one environment variable:
   `JWT_SECRET` (generated separately for this service in `render.yaml`),
   so it isn't interchangeable with a Governor/student token even if
   someone got hold of one.
-- **Can do:** list all streams (name, join code, Governor email, student/
+- **Can do:** approve or reject a newly self-signed-up stream (see below),
+  list all streams (name, join code, Governor email, status, student/
   course counts, last activity), view a stream's full class data
   read-only, reset a Governor's password, regenerate a join code, delete
   a stream entirely (with a type-the-name-to-confirm prompt — this is
@@ -114,6 +115,34 @@ Same codebase, switched by one environment variable:
 - **Cannot do:** edit a stream's roster/attendance/materials content
   directly — that stays the Governor's own action, through their own
   account, on the main service. The backoffice can look, and can reset
+  access, but doesn't reach in and change class data itself.
+
+### Approval gate on new streams
+
+Self-serve signup means anyone can spin up a stream — which is the
+point, but it also means new streams shouldn't get full run of the
+platform unreviewed. Every stream now has a `status`:
+`pending` → `approved` / `rejected`.
+
+- A stream created via `governorSignup` starts `pending`. Every stream
+  that already existed before this feature (including from before
+  multi-tenancy) was automatically marked `approved` when the `status`
+  column was added — nothing already running gets locked out.
+- **While pending or rejected:** the Governor can still sign in, but sees
+  a "waiting for approval" (or "not approved") screen instead of the
+  dashboard. Every mutating route — saving class data, uploading files,
+  managing the roster, checking in to attendance — is blocked server-side
+  by `requireApprovedStream` in `src/server.js`, not just hidden in the
+  UI. Students can't even resolve the join code for an unapproved stream,
+  so they can't find it to sign up.
+- **Approving/rejecting** happens from the admin backoffice — either
+  inline from the stream list (pending streams show Approve/Reject
+  buttons directly) or from a stream's detail page. Both actions are
+  logged to `admin_audit_log` like everything else the backoffice does.
+- A Governor's session doesn't know their status has changed until they
+  check — the app re-checks automatically on page load and offers a
+  "Check status" button on the waiting screen, via `GET /api/streams/me`.
+
   access, but doesn't reach in and change class data itself.
 - **Every view and action is written to `admin_audit_log`** (action,
   which stream, when) — an append-only table nothing else in the app
