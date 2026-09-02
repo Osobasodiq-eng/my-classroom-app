@@ -52,14 +52,20 @@ async function dailyRequest(method, path, body) {
 // after class ends, rather than accumulating unused rooms forever.
 async function createRoom(name) {
   const expiresInSeconds = 6 * 60 * 60; // 6 hours — generous for one class session
-  return dailyRequest('POST', '/rooms', {
-    name,
-    properties: {
-      enable_recording: 'cloud',
-      exp: Math.floor(Date.now() / 1000) + expiresInSeconds,
-      eject_at_room_exp: true,
-    },
-  });
+  const properties = {
+    exp: Math.floor(Date.now() / 1000) + expiresInSeconds,
+    eject_at_room_exp: true,
+  };
+  // Cloud recording is a paid Daily feature gated behind having a card
+  // on file — attempting to set it without one fails room creation
+  // entirely ("property 'enable_recording' cannot be set to that value
+  // with your current plan"), taking calling down with it. Kept behind
+  // its own flag so calling works today, and recording turns on later
+  // with an environment variable change, not another code deploy.
+  if (String(process.env.DAILY_ENABLE_RECORDING || '').toLowerCase() === 'true') {
+    properties.enable_recording = 'cloud';
+  }
+  return dailyRequest('POST', '/rooms', { name, properties });
 }
 
 async function deleteRoom(name) {

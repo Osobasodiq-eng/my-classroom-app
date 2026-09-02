@@ -150,6 +150,13 @@ Record button for the room owner) rather than needing to hand-build one.
   test against.** The first real call with a real `DAILY_API_KEY` is the
   actual test — `src/daily.js` is the file to check first if something
   doesn't match Daily's current API shape.
+- **Cloud recording needs a credit card on Daily's side, separately from
+  calling itself.** Calling is free (10,000 participant-minutes/month, no
+  card); attempting to enable cloud recording without a card fails call
+  *creation* entirely, not just recording — Daily rejects the room
+  outright. `DAILY_ENABLE_RECORDING` (default `false`) keeps recording
+  off until a card's added, so calling works from day one. Flip it to
+  `true` once the card's on file — no code change needed.
 - **Optional, like `GROQ_API_KEY`:** without `DAILY_API_KEY`/
   `DAILY_DOMAIN` set, the server still boots (with a console warning),
   and `/api/calls` routes fail with a clear error instead.
