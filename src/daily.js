@@ -28,7 +28,16 @@ async function dailyRequest(method, path, body) {
   });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const message = (json && (json.error || json.info)) || `Daily API error (${res.status})`;
+    // Daily's error bodies carry two parts: `error` (a stable type
+    // string) and `info` (the actually diagnostic human-readable detail,
+    // per https://docs.daily.co/docs/create-and-manage-rooms-with-the-rest-api).
+    // Picking only `error` silently threw away the useful half — this
+    // was a real bug, not a Daily quirk, and it's why an earlier failure
+    // only ever showed "invalid-request-error" with nothing else.
+    const parts = [];
+    if (json && json.error) parts.push(json.error);
+    if (json && json.info) parts.push(json.info);
+    const message = parts.length ? parts.join(': ') : `Daily API error (${res.status})`;
     throw new Error(message);
   }
   return json;

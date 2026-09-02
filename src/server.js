@@ -389,18 +389,29 @@ if (ADMIN_ONLY) {
   });
 
   // Daily calls this — not a browser — whenever a recording starts,
-  // finishes processing, or fails. Verified with an HMAC signature so an
-  // arbitrary caller can't forge a "recording ready" event; the exact
-  // header/algorithm here is written against Daily's documented webhook
-  // format but hasn't been exercised against a live account yet — this
-  // is the first thing to check against Daily's current docs once
-  // DAILY_WEBHOOK_SECRET is actually configured from their dashboard.
+  // finishes processing, or fails. Verified against Daily's actual
+  // documented scheme (https://docs.daily.co/reference/rest-api/webhooks):
+  // sign "<timestamp>.<JSON.stringify(body)>" with the webhook's hmac
+  // secret, which Daily hands you base64-encoded — it must be decoded to
+  // raw bytes before use as the HMAC key, and the digest is base64, not
+  // hex. (An earlier version of this file guessed a generic
+  // raw-body-plus-hex-digest scheme, which was wrong — this is the
+  // corrected version, confirmed against Daily's docs directly.)
   app.post('/api/webhooks/daily', async (req, res) => {
     const secret = process.env.DAILY_WEBHOOK_SECRET;
     if (secret) {
+      const timestamp = req.headers['x-webhook-timestamp'];
       const signature = req.headers['x-webhook-signature'];
-      const expected = crypto.createHmac('sha256', secret).update(req.rawBody).digest('hex');
-      if (!signature || signature !== expected) {
+      if (!timestamp || !signature) {
+        return res.status(401).json({ error: 'Missing webhook signature headers.' });
+      }
+      const signedString = timestamp + '.' + JSON.stringify(req.body);
+      const secretBytes = Buffer.from(secret, 'base64');
+      const expected = crypto.createHmac('sha256', secretBytes).update(signedString).digest('base64');
+      const sigBuf = Buffer.from(signature);
+      const expBuf = Buffer.from(expected);
+      const valid = sigBuf.length === expBuf.length && crypto.timingSafeEqual(sigBuf, expBuf);
+      if (!valid) {
         return res.status(401).json({ error: 'Invalid webhook signature.' });
       }
     }
