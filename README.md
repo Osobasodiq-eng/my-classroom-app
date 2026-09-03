@@ -117,53 +117,57 @@ Same codebase, switched by one environment variable:
   account, on the main service. The backoffice can look, and can reset
   access, but doesn't reach in and change class data itself.
 
-### Live class calls & recording
+### Live class calls
 
-Voice/video calls run on Daily.co, embedded via their Prebuilt UI (a
-plain `<iframe>` — no separate video SDK bundled into the app). This is
-a deliberate build-vs-buy choice: running your own WebRTC signaling/SFU
-infrastructure for this is a large, ongoing commitment, and Daily's
-Prebuilt already ships the call UI (tiles, mute, screen share, and a
-Record button for the room owner) rather than needing to hand-build one.
+Voice/video calls run on **LiveKit Cloud**, connected to directly via
+their client SDK (`livekit-client`, loaded from a CDN — see `<head>` in
+`public/index.html`) rather than an embedded provider UI. This wasn't
+the first choice: an earlier version of this feature used Daily.co's
+Prebuilt UI (a ready-made call interface you just embed in an iframe),
+which was much less work to build — but Daily's cloud recording, and on
+some accounts even basic calling, turned out to require a credit card on
+file. LiveKit Cloud's free tier works for calling with no card, at the
+cost of having to build the actual call UI (video tiles, mute/camera
+controls) by hand — see `connectToCall`, `attachTrackToTile`, and the
+surrounding functions in `public/index.html`.
 
-- **`POST /api/calls`** (Governor, approved stream only) creates a Daily
-  room and a `call_rooms` row, and returns a meeting token for the
-  Governor to join as room owner.
+- **No explicit "create room" step.** Unlike Daily, a LiveKit room is
+  created automatically the moment the first participant's token is used
+  to join it, and closes itself once everyone leaves. `src/livekit.js`
+  only ever issues tokens (`createToken`) and, for ending a call early,
+  deletes the room server-side (`endRoom`) — there's no "create" call to
+  fail the way Daily's did.
+- **`POST /api/calls`** (Governor, approved stream only) picks a unique
+  room name, stores a `call_rooms` row, and returns a join token for the
+  Governor.
 - **`POST /api/calls/:id/token`** issues a join token for anyone else in
   that same stream — Governor or student, checked by `req.streamId`
   matching the room's stream, same as everywhere else in this app.
-- **Recording is started/stopped from inside the call** (the Record
-  button Daily's Prebuilt UI shows to the owner when a room has
-  `enable_recording: 'cloud'` set — see `src/daily.js`), not a separate
-  API route here.
-- **`POST /api/webhooks/daily`** is Daily's own notification channel —
-  it tells this app when a recording starts, finishes, or fails, and
-  that's how a `call_recordings` row gets created and later marked
-  `ready`. Verified with an HMAC signature (`DAILY_WEBHOOK_SECRET`) so an
-  arbitrary caller can't forge a "recording ready" event.
-- **Recording files themselves stay on Daily's storage** — this app only
-  ever stores a `daily_recording_id` pointer, fetching a fresh, temporary
-  playback link from Daily's API on each request (`GET
-  /api/recordings/:id/link`), since Daily's own download links expire
-  after a few hours.
-- **Written against Daily's documented API without a live account to
-  test against.** The first real call with a real `DAILY_API_KEY` is the
-  actual test — `src/daily.js` is the file to check first if something
-  doesn't match Daily's current API shape.
-- **Cloud recording needs a credit card on Daily's side, separately from
-  calling itself.** Calling is free (10,000 participant-minutes/month, no
-  card); attempting to enable cloud recording without a card fails call
-  *creation* entirely, not just recording — Daily rejects the room
-  outright. `DAILY_ENABLE_RECORDING` (default `false`) keeps recording
-  off until a card's added, so calling works from day one. Flip it to
-  `true` once the card's on file — no code change needed.
-- **Optional, like `GROQ_API_KEY`:** without `DAILY_API_KEY`/
-  `DAILY_DOMAIN` set, the server still boots (with a console warning),
-  and `/api/calls` routes fail with a clear error instead.
+- **The call UI itself is hand-built**, not embedded — `render()` has a
+  guard at its top that stops it from wiping out the live `<video>`
+  elements once a call is connected (see the comment right above that
+  guard); tiles are added and removed directly in response to LiveKit's
+  own `TrackSubscribed`/`ParticipantConnected`/etc. events instead of
+  going through the app's normal re-render cycle.
+- **Recording is not implemented on this integration yet.** The
+  `call_recordings` table and its read routes are kept in place (so nothing
+  needs rewriting later) but nothing currently writes to them — adding
+  LiveKit Egress-based recording is a distinct follow-up task.
+- **Written against LiveKit's documented token/room/client APIs without a
+  live project to test against from the sandbox this was built in.** The
+  local-participant track-publication handling in
+  `connectToCall` (`public/index.html`) is the single least-verified
+  piece — if local video doesn't show up for yourself while remote
+  participants' video works fine, that's the first place to check against
+  LiveKit's current `livekit-client` API docs.
+- **Optional, like `GROQ_API_KEY`:** without `LIVEKIT_API_KEY`/
+  `LIVEKIT_API_SECRET`/`LIVEKIT_URL` set, the server still boots (with a
+  console warning), and `/api/calls` routes fail with a clear error
+  instead.
 - **Consent:** both starting and joining a call show a plain confirmation
-  ("this call may be recorded") before proceeding. This is a first pass,
-  not a substitute for checking what a real consent notice needs to say
-  for an institutional deployment.
+  before proceeding, written with an eventual recording feature in mind.
+  This is a first pass, not a substitute for checking what a real consent
+  notice needs to say for an institutional deployment.
 
 ### Approval gate on new streams
 

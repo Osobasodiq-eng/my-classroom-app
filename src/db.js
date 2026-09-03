@@ -295,10 +295,14 @@ async function init() {
     );
   `);
 
-  // A live class call — the Daily.co room itself, not the recording.
-  // daily_room_name is the name Daily knows it by, which is what the
-  // recording webhook uses to find its way back to a stream (recordings
-  // don't otherwise carry a stream_id from Daily's side).
+  // A live class call — the video provider's room, not the recording.
+  // The column is still named daily_room_name from when this ran on
+  // Daily.co; it now holds LiveKit's room name instead (LiveKit was
+  // swapped in after Daily's cloud recording turned out to require a
+  // credit card even for calling in some account states). Left
+  // unrenamed deliberately — renaming a column is a real migration for
+  // zero functional benefit, since nothing outside this file reads the
+  // column name itself.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS call_rooms (
       id TEXT PRIMARY KEY,
@@ -310,13 +314,11 @@ async function init() {
       ended_at TIMESTAMPTZ
     );
   `);
-  // The recording's actual audio/video file lives on Daily's storage, not
-  // here — same principle as uploaded files never living inline in the
-  // app_state document. This row is a pointer: daily_recording_id is
-  // permanent, but Daily's direct download links expire after a few
-  // hours, so a fresh one is fetched from Daily's API on each playback
-  // request (see getRecordingAccessLink in src/daily.js) rather than
-  // stored once and going stale.
+  // Not currently written to — recording isn't implemented on the
+  // LiveKit integration yet (see src/livekit.js and the call routes in
+  // server.js), only planned for. Kept in place, same reasoning as
+  // above: same shape either provider ends up using, so no migration
+  // needed once recording (via LiveKit Egress) is actually added.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS call_recordings (
       id TEXT PRIMARY KEY,
@@ -944,11 +946,12 @@ async function getCallRoom(streamId, id) {
   return rows[0] || null;
 }
 
-// Unscoped lookup by Daily's own room name — this is the one place a
-// call is found *without* already knowing its stream, because the only
-// thing the recording webhook has to go on is the name Daily gave the
-// room. Never exposed to a route directly; only used internally to
-// resolve which stream a webhook event belongs to.
+// Unscoped lookup by the video provider's own room name — the one place
+// a call is found *without* already knowing its stream, since a
+// recording webhook has nothing to go on but the provider's room name.
+// Not currently called anywhere (no recording webhook is wired up yet —
+// see the note on call_recordings above), but kept ready for when one
+// is added.
 async function getCallRoomByDailyName(dailyRoomName) {
   const { rows } = await pool.query('SELECT * FROM call_rooms WHERE daily_room_name = $1', [dailyRoomName]);
   return rows[0] || null;
