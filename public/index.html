@@ -170,14 +170,26 @@
   .share-link-row input{ flex:1; min-width:0; }
   .share-note{ margin-top:18px; padding:11px 13px; border-radius:8px; background:rgba(201,166,103,0.1); border:1px solid rgba(201,166,103,0.3); color:var(--brass); font-size:12.5px; line-height:1.55; }
   .btn.copied{ background:var(--sage) !important; color:#173321 !important; }
-  .call-controls{ display:flex; align-items:center; justify-content:space-between; padding:14px 20px; border-bottom:1px solid var(--rule); flex-wrap:wrap; gap:8px; }
-  .call-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:10px; padding:16px; background:var(--bg-deep); min-height:50vh; }
-  .call-tile{ position:relative; background:var(--panel-raised); border-radius:10px; overflow:hidden; aspect-ratio:4/3; display:flex; align-items:center; justify-content:center; }
+
+  /* ---- Live call, Meet-style ---- */
+  .call-shell{ background:#0e1a13; border-radius:12px; overflow:hidden; }
+  .call-topbar{ display:flex; align-items:center; justify-content:space-between; padding:12px 18px; color:var(--chalk-dim); font-size:13px; }
+  .call-topbar .call-meta{ display:flex; align-items:center; gap:10px; font-family:'IBM Plex Mono',monospace; }
+  .call-topbar .call-pcount{ display:inline-flex; align-items:center; gap:5px; background:rgba(241,238,226,0.08); border-radius:20px; padding:4px 11px; font-size:12.5px; }
+  .call-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:10px; padding:10px 18px; background:#0e1a13; min-height:52vh; align-content:center; }
+  .call-tile{ position:relative; background:#1b2b21; border-radius:12px; overflow:hidden; aspect-ratio:16/10; display:flex; align-items:center; justify-content:center; }
   .call-tile video{ width:100%; height:100%; object-fit:cover; }
-  .call-tile .call-tile-name{ position:absolute; left:8px; bottom:8px; font-size:11.5px; background:rgba(10,18,13,0.6); padding:3px 8px; border-radius:5px; color:var(--chalk); }
-  .call-tile .call-tile-placeholder{ font-family:'Fraunces',serif; font-size:28px; color:var(--chalk-faint); width:56px; height:56px; border-radius:50%; background:var(--panel); display:flex; align-items:center; justify-content:center; }
-  .call-toolbar{ display:flex; gap:8px; padding:12px 20px; border-top:1px solid var(--rule); flex-wrap:wrap; }
-  .call-toolbar .btn.muted{ background:var(--rose); color:#2a1214; }
+  .call-tile .call-tile-name{ position:absolute; left:10px; bottom:10px; font-size:12.5px; background:rgba(10,18,13,0.65); padding:4px 10px; border-radius:20px; color:var(--chalk); display:flex; align-items:center; gap:6px; }
+  .call-tile .call-tile-name .mic-off-dot{ width:15px; height:15px; border-radius:50%; background:var(--rose); display:inline-flex; align-items:center; justify-content:center; font-size:9px; }
+  .call-tile .call-tile-placeholder{ font-family:'Fraunces',serif; font-size:34px; font-weight:600; color:#e8e4d6; width:72px; height:72px; border-radius:50%; background:var(--brass-dim); display:flex; align-items:center; justify-content:center; }
+  .call-toolbar-wrap{ display:flex; justify-content:center; padding:16px 18px 20px; background:#0e1a13; }
+  .call-toolbar{ display:flex; align-items:center; gap:10px; background:#1b2b21; border-radius:40px; padding:8px 10px; }
+  .call-pill{ width:46px; height:46px; border-radius:50%; border:none; background:#2c3f31; color:var(--chalk); display:flex; align-items:center; justify-content:center; cursor:pointer; font-size:18px; transition:.15s; }
+  .call-pill:hover{ background:#37503f; }
+  .call-pill.off{ background:var(--rose); color:#2a1214; }
+  .call-pill.hangup{ background:var(--rose); color:#2a1214; width:58px; border-radius:29px; }
+  .call-pill.hangup:hover{ background:#c94f55; }
+  .call-you-muted{ text-align:center; font-size:12px; color:var(--chalk-faint); padding-bottom:6px; background:#0e1a13; }
   .lecturer-chip{ display:inline-flex; align-items:center; gap:6px; font-size:12.5px; background:rgba(241,238,226,0.06); border:1px solid var(--rule); border-radius:20px; padding:4px 6px 4px 10px; margin:0 6px 6px 0; }
   .lecturer-chip button{background:none; border:none; color:var(--chalk-faint); cursor:pointer; font-size:13px; padding:0 2px;}
   .lecturer-chip button:hover{color:var(--rose);}
@@ -1745,20 +1757,22 @@
   // until the call actually ends.
   function renderCalls(){
     if(activeCall){
-      return '<div class="panel" style="padding:0; overflow:hidden;">' +
-        '<div class="call-controls">' +
-          '<strong>Live class call</strong>' +
-          '<div style="display:flex; gap:8px;">' +
-            (role === "governor" ? '<button class="btn ghost small" id="endCallBtn">End call for everyone</button>' : '') +
-            '<button class="btn ghost small" id="leaveCallBtn">Leave call</button>' +
+      return '<div class="call-shell">' +
+        '<div class="call-topbar">' +
+          '<span class="call-meta"><span id="callTimer">00:00</span></span>' +
+          '<div style="display:flex; align-items:center; gap:10px;">' +
+            '<span class="call-pcount" id="callPcount">👤 1</span>' +
+            (role === "governor" ? '<button class="btn ghost small" id="endCallBtn" style="border-color:var(--rose); color:var(--rose);">End for everyone</button>' : '') +
           '</div>' +
         '</div>' +
         '<div class="call-grid" id="callGrid"></div>' +
-        '<div class="call-toolbar">' +
-          '<button class="btn ghost' + (callMicOn ? '' : ' muted') + '" type="button" id="toggleMicBtn">' + (callMicOn ? "Mute mic" : "Unmute mic") + '</button>' +
-          '<button class="btn ghost' + (callCamOn ? '' : ' muted') + '" type="button" id="toggleCamBtn">' + (callCamOn ? "Turn camera off" : "Turn camera on") + '</button>' +
-        '</div>' +
-        (callError ? '<p class="hint" style="color:var(--rose); padding:0 20px 14px;">' + escapeHtml(callError) + '</p>' : '') +
+        (callMicOn ? '' : '<div class="call-you-muted">Your mic is off \u2014 click the mic button to unmute.</div>') +
+        (callError ? '<p class="hint" style="color:var(--rose); text-align:center; padding-bottom:10px;">' + escapeHtml(callError) + '</p>' : '') +
+        '<div class="call-toolbar-wrap"><div class="call-toolbar">' +
+          '<button class="call-pill' + (callMicOn ? '' : ' off') + '" type="button" id="toggleMicBtn" title="' + (callMicOn ? "Mute mic" : "Unmute mic") + '">' + (callMicOn ? "🎤" : "🔇") + '</button>' +
+          '<button class="call-pill' + (callCamOn ? '' : ' off') + '" type="button" id="toggleCamBtn" title="' + (callCamOn ? "Turn camera off" : "Turn camera on") + '">' + (callCamOn ? "📹" : "🚫") + '</button>' +
+          '<button class="call-pill hangup" type="button" id="leaveCallBtn" title="Leave call">📴</button>' +
+        '</div></div>' +
       '</div>';
     }
 
@@ -1790,6 +1804,9 @@
 
   // ---- LiveKit connection + tile management (imperative, not through render()) ----
 
+  let callTimerInterval = null;
+  let callStartedAt = null;
+
   function callTileId(identity){ return "call-tile-" + identity.replace(/[^a-zA-Z0-9_-]/g, ""); }
 
   function ensureTile(identity, label){
@@ -1800,11 +1817,20 @@
       tile = document.createElement("div");
       tile.className = "call-tile";
       tile.id = callTileId(identity);
+      tile.dataset.label = label || identity; // clean copy, so it never has to be parsed back out of rendered HTML later
       tile.innerHTML = '<div class="call-tile-placeholder">' + escapeHtml((label||"?").slice(0,1).toUpperCase()) + '</div>' +
-        '<span class="call-tile-name">' + escapeHtml(label || identity) + '</span>';
+        '<span class="call-tile-name"><span class="mic-off-name-icon"></span>' + escapeHtml(label || identity) + '</span>';
       grid.appendChild(tile);
+      updateParticipantCount();
     }
     return tile;
+  }
+
+  function setTileMuted(identity, isMuted){
+    const tile = document.getElementById(callTileId(identity));
+    if(!tile) return;
+    const icon = tile.querySelector(".mic-off-name-icon");
+    if(icon) icon.innerHTML = isMuted ? '<span class="mic-off-dot">🔇</span>' : '';
   }
 
   function attachTrackToTile(identity, label, track){
@@ -1826,6 +1852,29 @@
   function removeParticipantTile(identity){
     const tile = document.getElementById(callTileId(identity));
     if(tile) tile.remove();
+    updateParticipantCount();
+  }
+
+  function updateParticipantCount(){
+    const el = document.getElementById("callPcount");
+    const grid = document.getElementById("callGrid");
+    if(el && grid) el.textContent = "👤 " + grid.querySelectorAll(".call-tile").length;
+  }
+
+  function startCallTimer(){
+    callStartedAt = Date.now();
+    if(callTimerInterval) clearInterval(callTimerInterval);
+    callTimerInterval = setInterval(() => {
+      const el = document.getElementById("callTimer");
+      if(!el){ clearInterval(callTimerInterval); callTimerInterval = null; return; }
+      const secs = Math.floor((Date.now() - callStartedAt) / 1000);
+      const m = String(Math.floor(secs / 60)).padStart(2, "0");
+      const s = String(secs % 60).padStart(2, "0");
+      el.textContent = m + ":" + s;
+    }, 1000);
+  }
+  function stopCallTimer(){
+    if(callTimerInterval){ clearInterval(callTimerInterval); callTimerInterval = null; }
   }
 
   // Connects to the room and wires up tile management. wsUrl/token come
@@ -1848,14 +1897,22 @@
     room.on(LivekitClient.RoomEvent.ParticipantDisconnected, (participant) => {
       removeParticipantTile(participant.identity);
     });
+    room.on(LivekitClient.RoomEvent.TrackMuted, (publication, participant) => {
+      if(publication.kind === "audio") setTileMuted(participant.identity, true);
+    });
+    room.on(LivekitClient.RoomEvent.TrackUnmuted, (publication, participant) => {
+      if(publication.kind === "audio") setTileMuted(participant.identity, false);
+    });
     room.on(LivekitClient.RoomEvent.Disconnected, () => {
       // Covers being disconnected from the other side too (e.g. the
       // Governor ending the call for everyone) — not just our own
       // "Leave call" click.
+      stopCallTimer();
       if(activeCall){ activeCall = null; lkRoom = null; loadCallRooms().then(render); }
     });
 
     await room.connect(wsUrl, token);
+    startCallTimer();
 
     // Existing participants (anyone who joined before we did) don't fire
     // ParticipantConnected for us — they need to be added to the grid
@@ -1865,6 +1922,7 @@
     await room.localParticipant.setMicrophoneEnabled(true).catch(() => { callMicOn = false; });
     await room.localParticipant.setCameraEnabled(true).catch(() => { callCamOn = false; });
     ensureTile(room.localParticipant.identity || "me", myLabel + " (you)");
+    setTileMuted(room.localParticipant.identity || "me", !callMicOn);
     room.localParticipant.trackPublications.forEach((pub) => {
       if(pub.track) attachTrackToTile(room.localParticipant.identity || "me", myLabel + " (you)", pub.track);
     });
@@ -1877,15 +1935,29 @@
     if(startCallBtn) startCallBtn.addEventListener("click", async () => {
       if(!confirm("This call may be recorded. By starting it, you confirm participants will be informed. Continue?")) return;
       callBusy = true; callError = ""; render();
+      let createdRoomId = null;
       try{
         const res = await fetch("/api/calls", { method:"POST", headers:{"Content-Type":"application/json","Authorization":"Bearer "+authToken}, body: JSON.stringify({}) });
         const json = await res.json();
         if(!res.ok) throw new Error(json.error || "Could not start the call.");
+        createdRoomId = json.roomId;
         activeCall = { roomId: json.roomId };
         callMicOn = true; callCamOn = true;
         render(); // builds the empty call shell — safe, lkRoom isn't set yet
         await connectToCall(json.roomId, json.wsUrl, json.token, "Governor");
-      }catch(e){ activeCall = null; lkRoom = null; callError = e.message; }
+      }catch(e){
+        activeCall = null; lkRoom = null; callError = e.message;
+        // The backend already marked this call "active" the moment it was
+        // created, before we knew whether the actual LiveKit connection
+        // would succeed. Left uncleaned, this stream would be stuck
+        // showing "Join call"/"End call" forever instead of "Start class
+        // call" — a real call that never actually connected, with no way
+        // back except this cleanup.
+        if(createdRoomId){
+          try{ await fetch("/api/calls/" + encodeURIComponent(createdRoomId) + "/end", { method:"POST", headers:{"Authorization":"Bearer "+authToken} }); }catch(e2){}
+        }
+      }
+      await loadCallRooms();
       callBusy = false; render();
     });
 
@@ -1909,6 +1981,7 @@
     });
 
     async function leaveCallLocally(){
+      stopCallTimer();
       if(lkRoom){ try{ await lkRoom.disconnect(); }catch(e){} }
       lkRoom = null; activeCall = null;
       await loadCallRooms(); render();
@@ -1936,14 +2009,50 @@
       if(!lkRoom) return;
       callMicOn = !callMicOn;
       await lkRoom.localParticipant.setMicrophoneEnabled(callMicOn).catch(() => {});
-      render();
+      // render() is a no-op while a call is connected (see the guard at
+      // the top of render()) — this button's own look, the local tile's
+      // mute badge, and the "you're muted" banner all have to be updated
+      // directly instead of through the normal render cycle.
+      toggleMicBtn.classList.toggle("off", !callMicOn);
+      toggleMicBtn.textContent = callMicOn ? "🎤" : "🔇";
+      toggleMicBtn.title = callMicOn ? "Mute mic" : "Unmute mic";
+      setTileMuted(lkRoom.localParticipant.identity || "me", !callMicOn);
+      const shell = toggleMicBtn.closest(".call-shell");
+      const existingBanner = shell ? shell.querySelector(".call-you-muted") : null;
+      if(!callMicOn && !existingBanner && shell){
+        const banner = document.createElement("div");
+        banner.className = "call-you-muted";
+        banner.textContent = "Your mic is off — click the mic button to unmute.";
+        shell.querySelector(".call-grid").insertAdjacentElement("afterend", banner);
+      } else if(callMicOn && existingBanner){
+        existingBanner.remove();
+      }
     });
     const toggleCamBtn = document.getElementById("toggleCamBtn");
     if(toggleCamBtn) toggleCamBtn.addEventListener("click", async () => {
       if(!lkRoom) return;
       callCamOn = !callCamOn;
       await lkRoom.localParticipant.setCameraEnabled(callCamOn).catch(() => {});
-      render();
+      toggleCamBtn.classList.toggle("off", !callCamOn);
+      toggleCamBtn.textContent = callCamOn ? "📹" : "🚫";
+      toggleCamBtn.title = callCamOn ? "Turn camera off" : "Turn camera on";
+      // Turning the camera off doesn't fire TrackUnsubscribed for
+      // ourselves (that event is for remote tracks only), so the local
+      // tile's video element has to be cleared by hand here — otherwise
+      // it would keep showing a frozen last frame instead of reverting
+      // to the initial placeholder.
+      if(!callCamOn){
+        const tile = document.getElementById(callTileId(lkRoom.localParticipant.identity || "me"));
+        if(tile){
+          tile.querySelectorAll("video").forEach(v => v.remove());
+          if(!tile.querySelector(".call-tile-placeholder")){
+            const ph = document.createElement("div");
+            ph.className = "call-tile-placeholder";
+            ph.textContent = (tile.dataset.label || "?").slice(0,1).toUpperCase();
+            tile.insertBefore(ph, tile.firstChild);
+          }
+        }
+      }
     });
   }
 
