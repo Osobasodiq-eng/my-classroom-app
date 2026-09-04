@@ -1982,7 +1982,13 @@
     ensureTile(room.localParticipant.identity || "me", myLabel + " (you)");
     setTileMuted(room.localParticipant.identity || "me", !callMicOn);
     room.localParticipant.trackPublications.forEach((pub) => {
-      if(pub.track) attachTrackToTile(room.localParticipant.identity || "me", myLabel + " (you)", pub.track);
+      // Only the local VIDEO track gets attached, for your own preview
+      // tile. Attaching your own local AUDIO track would play your own
+      // microphone back through your own speakers — that's the actual
+      // cause of "I can hear myself," not an acoustic/hardware issue.
+      // Remote participants already receive your audio from the server;
+      // there's never a reason to also play it back to yourself.
+      if(pub.track && pub.track.kind === "video") attachTrackToTile(room.localParticipant.identity || "me", myLabel + " (you)", pub.track);
     });
 
     return room;
