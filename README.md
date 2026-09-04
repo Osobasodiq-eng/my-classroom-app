@@ -149,6 +149,13 @@ surrounding functions in `public/index.html`.
   guard); tiles are added and removed directly in response to LiveKit's
   own `TrackSubscribed`/`ParticipantConnected`/etc. events instead of
   going through the app's normal re-render cycle.
+- **Screen sharing works** via `localParticipant.setScreenShareEnabled()` —
+  a shared screen gets its own wider tile (`.screen-tile`, pinned to the
+  front of the grid), separate from the sharer's camera tile, since both
+  can be live at once. Handles the browser's native "Stop sharing" bar
+  the same as our own toolbar button, via LiveKit's
+  `LocalTrackUnpublished` event — either path cleans up the tile and
+  button state correctly.
 - **Recording is not implemented on this integration yet.** The
   `call_recordings` table and its read routes are kept in place (so nothing
   needs rewriting later) but nothing currently writes to them — adding

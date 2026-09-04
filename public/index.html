@@ -188,6 +188,9 @@
   .call-pill:hover{ background:#37503f; }
   .call-pill.off{ background:var(--rose); color:#2a1214; }
   .call-pill.hangup{ background:var(--rose); color:#2a1214; width:58px; border-radius:29px; }
+  .call-pill.sharing{ background:var(--slate); color:#12202f; }
+  .call-tile.screen-tile{ grid-column:span 2; aspect-ratio:16/9; background:#10201a; }
+  @media (max-width:640px){ .call-tile.screen-tile{ grid-column:span 1; } }
   .call-pill.hangup:hover{ background:#c94f55; }
   .call-you-muted{ text-align:center; font-size:12px; color:var(--chalk-faint); padding-bottom:6px; background:#0e1a13; }
   .lecturer-chip{ display:inline-flex; align-items:center; gap:6px; font-size:12.5px; background:rgba(241,238,226,0.06); border:1px solid var(--rule); border-radius:20px; padding:4px 6px 4px 10px; margin:0 6px 6px 0; }
@@ -378,6 +381,7 @@
   let callError = "";
   let callMicOn = true;
   let callCamOn = true;
+  let callScreenSharing = false;
   let cgpaSemesters = [];
   let cgpaLoadedForStudent = null;
 
@@ -1771,6 +1775,7 @@
         '<div class="call-toolbar-wrap"><div class="call-toolbar">' +
           '<button class="call-pill' + (callMicOn ? '' : ' off') + '" type="button" id="toggleMicBtn" title="' + (callMicOn ? "Mute mic" : "Unmute mic") + '">' + (callMicOn ? "🎤" : "🔇") + '</button>' +
           '<button class="call-pill' + (callCamOn ? '' : ' off') + '" type="button" id="toggleCamBtn" title="' + (callCamOn ? "Turn camera off" : "Turn camera on") + '">' + (callCamOn ? "📹" : "🚫") + '</button>' +
+          '<button class="call-pill' + (callScreenSharing ? ' sharing' : '') + '" type="button" id="toggleScreenBtn" title="' + (callScreenSharing ? "Stop sharing screen" : "Share screen") + '">🖥️</button>' +
           '<button class="call-pill hangup" type="button" id="leaveCallBtn" title="Leave call">📴</button>' +
         '</div></div>' +
       '</div>';
@@ -1808,6 +1813,7 @@
   let callStartedAt = null;
 
   function callTileId(identity){ return "call-tile-" + identity.replace(/[^a-zA-Z0-9_-]/g, ""); }
+  function screenIdentity(identity){ return identity + "-screen"; }
 
   function ensureTile(identity, label){
     const grid = document.getElementById("callGrid");
@@ -1826,6 +1832,31 @@
     return tile;
   }
 
+  // Screen shares get their own wider tile, separate from the sharer's
+  // camera tile — a participant can have both live at once. Kept out of
+  // the participant count (it's not a person), and pinned to the front
+  // of the grid since a shared screen is usually the thing everyone
+  // actually wants to look at.
+  function ensureScreenTile(identity, label){
+    const grid = document.getElementById("callGrid");
+    if(!grid) return null;
+    const id = screenIdentity(identity);
+    let tile = document.getElementById(callTileId(id));
+    if(!tile){
+      tile = document.createElement("div");
+      tile.className = "call-tile screen-tile";
+      tile.id = callTileId(id);
+      tile.innerHTML = '<span class="call-tile-name">🖥️ ' + escapeHtml((label || identity) + "\u2019s screen") + '</span>';
+      grid.insertBefore(tile, grid.firstChild);
+    }
+    return tile;
+  }
+
+  function removeScreenTile(identity){
+    const tile = document.getElementById(callTileId(screenIdentity(identity)));
+    if(tile) tile.remove();
+  }
+
   function setTileMuted(identity, isMuted){
     const tile = document.getElementById(callTileId(identity));
     if(!tile) return;
@@ -1833,8 +1864,8 @@
     if(icon) icon.innerHTML = isMuted ? '<span class="mic-off-dot">🔇</span>' : '';
   }
 
-  function attachTrackToTile(identity, label, track){
-    const tile = ensureTile(identity, label);
+  function attachTrackToTile(identity, label, track, isScreen){
+    const tile = isScreen ? ensureScreenTile(identity, label) : ensureTile(identity, label);
     if(!tile) return;
     const placeholder = tile.querySelector(".call-tile-placeholder");
     if(placeholder) placeholder.remove();
@@ -1852,13 +1883,14 @@
   function removeParticipantTile(identity){
     const tile = document.getElementById(callTileId(identity));
     if(tile) tile.remove();
+    removeScreenTile(identity); // in case they were sharing when they left
     updateParticipantCount();
   }
 
   function updateParticipantCount(){
     const el = document.getElementById("callPcount");
     const grid = document.getElementById("callGrid");
-    if(el && grid) el.textContent = "👤 " + grid.querySelectorAll(".call-tile").length;
+    if(el && grid) el.textContent = "👤 " + grid.querySelectorAll(".call-tile:not(.screen-tile)").length;
   }
 
   function startCallTimer(){
@@ -1882,14 +1914,29 @@
   // this function never talks to LiveKit's REST API directly, only the
   // realtime client SDK loaded via CDN (see <head>, global LivekitClient).
   async function connectToCall(roomId, wsUrl, token, myLabel){
-    const room = new LivekitClient.Room();
+    // Explicit, not left to LiveKit's own defaults — echoCancellation is
+    // what stops your own speaker output from looping back into your
+    // mic and being heard by others as an echo. (LiveKit's JS client
+    // does default these to true internally already, so this mostly
+    // guards against relying on an implicit default — it won't fix
+    // echo caused by two nearby devices/speakers picking up each
+    // other's audio, which is an acoustic problem, not a settings one.)
+    const room = new LivekitClient.Room({
+      audioCaptureDefaults: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
     lkRoom = room;
 
     room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
-      attachTrackToTile(participant.identity, participant.name || participant.identity, track);
+      const isScreen = publication.source === LivekitClient.Track.Source.ScreenShare;
+      attachTrackToTile(participant.identity, participant.name || participant.identity, track, isScreen);
     });
-    room.on(LivekitClient.RoomEvent.TrackUnsubscribed, (track) => {
+    room.on(LivekitClient.RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
       track.detach().forEach(el => el.remove());
+      if(publication.source === LivekitClient.Track.Source.ScreenShare) removeScreenTile(participant.identity);
     });
     room.on(LivekitClient.RoomEvent.ParticipantConnected, (participant) => {
       ensureTile(participant.identity, participant.name || participant.identity);
@@ -1902,6 +1949,17 @@
     });
     room.on(LivekitClient.RoomEvent.TrackUnmuted, (publication, participant) => {
       if(publication.kind === "audio") setTileMuted(participant.identity, false);
+    });
+    // Covers stopping a screen share either via our own toolbar button or
+    // via the browser's own native "Stop sharing" bar — both end up here,
+    // so the tile and button state stay correct either way.
+    room.on(LivekitClient.RoomEvent.LocalTrackUnpublished, (publication) => {
+      if(publication.source === LivekitClient.Track.Source.ScreenShare){
+        callScreenSharing = false;
+        removeScreenTile(room.localParticipant.identity || "me");
+        const btn = document.getElementById("toggleScreenBtn");
+        if(btn){ btn.classList.remove("sharing"); btn.title = "Share screen"; }
+      }
     });
     room.on(LivekitClient.RoomEvent.Disconnected, () => {
       // Covers being disconnected from the other side too (e.g. the
@@ -1942,7 +2000,7 @@
         if(!res.ok) throw new Error(json.error || "Could not start the call.");
         createdRoomId = json.roomId;
         activeCall = { roomId: json.roomId };
-        callMicOn = true; callCamOn = true;
+        callMicOn = true; callCamOn = true; callScreenSharing = false;
         render(); // builds the empty call shell — safe, lkRoom isn't set yet
         await connectToCall(json.roomId, json.wsUrl, json.token, "Governor");
       }catch(e){
@@ -1973,7 +2031,7 @@
         const json = await res.json();
         if(!res.ok) throw new Error(json.error || "Could not join the call.");
         activeCall = { roomId };
-        callMicOn = true; callCamOn = true;
+        callMicOn = true; callCamOn = true; callScreenSharing = false;
         render();
         await connectToCall(roomId, json.wsUrl, json.token, myName);
       }catch(e){ activeCall = null; lkRoom = null; callError = e.message; }
@@ -2052,6 +2110,37 @@
             tile.insertBefore(ph, tile.firstChild);
           }
         }
+      }
+    });
+
+    // getDisplayMedia (what setScreenShareEnabled uses under the hood)
+    // opens the browser's own picker and can be cancelled by the user —
+    // that rejects the promise, which is caught here rather than left as
+    // an unhandled error, resetting the button back to "not sharing".
+    const toggleScreenBtn = document.getElementById("toggleScreenBtn");
+    if(toggleScreenBtn) toggleScreenBtn.addEventListener("click", async () => {
+      if(!lkRoom) return;
+      const turningOn = !callScreenSharing;
+      try{
+        await lkRoom.localParticipant.setScreenShareEnabled(turningOn);
+        callScreenSharing = turningOn;
+        toggleScreenBtn.classList.toggle("sharing", callScreenSharing);
+        toggleScreenBtn.title = callScreenSharing ? "Stop sharing screen" : "Share screen";
+        if(turningOn){
+          lkRoom.localParticipant.trackPublications.forEach((pub) => {
+            if(pub.source === LivekitClient.Track.Source.ScreenShare && pub.track){
+              attachTrackToTile(lkRoom.localParticipant.identity || "me", "You", pub.track, true);
+            }
+          });
+        }
+        // Turning off fires LocalTrackUnpublished (wired above), which
+        // handles tile cleanup and button state — no need to duplicate
+        // that here.
+      }catch(e){
+        // User cancelled the browser's screen picker, or denied
+        // permission — not a real error worth surfacing as one.
+        callScreenSharing = false;
+        toggleScreenBtn.classList.remove("sharing");
       }
     });
   }
